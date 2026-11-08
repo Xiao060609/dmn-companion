@@ -633,7 +633,7 @@ memory_bridge.apply_review :568 → forgetting.parse_review_reply → store.dele
 
 | 标准 | 判定函数 | 实现 |
 |---|---|---|
-| ① **形态**：主谓宾陈述 | `_has_subject_predicate` :411-425 | 查表启发式：9 个主语词（他/她/我/你/您/它/主人/主人/宝贝/大家）+ 60 个谓语词（是/在/有/喜欢/讨厌/…） |
+| ① **形态**：主谓宾陈述 | `_has_subject_predicate` :411-425 | 查表启发式：9 个主语词（他/她/我/你/您/它/主人/晓/宝贝/大家）+ 60 个谓语词（是/在/有/喜欢/讨厌/…） |
 | ② **可验证性**：过场景还有用 | 反向排除 | 命中 `INFERENCE_WORDS`(29) → 否决；`SINGLE_EVENT_WORDS`(31) / `TRANSIENT_WORDS`(12) → 降级成 event |
 
 **分界线**（模块 docstring :19-22）：「他喜欢在深夜聊天」→ 多看几天就知道真假 → 认知；「他嘴硬时在试探」→ 永远无法验证 → 想法，不落库。

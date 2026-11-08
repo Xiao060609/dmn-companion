@@ -118,7 +118,7 @@ gateway.py（角色层，3175 行）
   ```
   if local_pet: return True                    # 桌宠，token 已校验
   if not trusted_identity: return False        # 不可信来源，一票否决
-  if uid and uid in OWNER_IDS: return True     # 命中 owner_ids（生产：<OWNER_UID>）
+  if uid and uid in OWNER_IDS: return True     # 命中 owner_ids（生产：10000001）
   return speaker == "主人"                     # ← 昵称等于「主人」就算主人
   ```
   **最后一行就是 P0-2 的根**（见 §8）。
@@ -394,7 +394,7 @@ create table if not exists pending(
 | **观望** | `SILENT_RE`（:2459）`^\s*([\[【](?:观望\|SILENT\|silent)[\]】])\s*$` 匹配 `TAG_RE.sub("", reply).strip()`（:1571） | `status="silent"`，text 原样返回 | **什么都不写**（:1691 `if status != "silent"`）——「她没开腔，群友的闲话不该占记忆」 |
 | **观望不被污染** | `_as_spoken`（:2334） | `silent` 直接 return，**不加 `[语音]`、不补句号** | — |
 | **空回复** | `parse_reply` 洗完成空串（:1669） | 记 `empty_reply.log`（`in` 截 80 字，修过一次 248KB 日志，:1673-1680）→ 固定话术「嗯……我没太听明白」`status="model_empty"` | user 写、assistant 写（status≠ok 且≠approval → **assistant 不写**，:1696-1701） |
-| **模型报错** | `reply is None and not tool_calls`（:1548） | 401/403 → `auth_error`「我这边连不上了，主人去后台换一下密钥」；其余第 0 轮重试 1 次，仍失败 → `model_error`「我这会儿有点卡」 | user 写、assistant 不写 |
+| **模型报错** | `reply is None and not tool_calls`（:1548） | 401/403 → `auth_error`「我这边连不上了，晓去后台换一下密钥」；其余第 0 轮重试 1 次，仍失败 → `model_error`「我这会儿有点卡」 | user 写、assistant 不写 |
 | **轮数用尽** | `parsed is None`（:1653） | 先**不带工具**再问一次；仍失败才 `tool_overflow`「我想了想还是没弄好」 | user 写、assistant 不写 |
 
 > 归纳：**只有 `ok` 和 `approval` 会写 assistant**。所以「她回了但没记」的四种状态（silent/model_empty/model_error/tool_overflow/auth_error/refused/approval_busy）在下一轮的历史里表现为「用户说了，她没答」。
@@ -451,7 +451,7 @@ pending 表 = [('main', 'write_file', 'qq_group:示例群')]
 
 文档 `项目地图.md:1243-1257` 宣称 T-08 已修：「正文里写一句 `Nickname: 主人` 就能冒充」→ 修的是**正文（string 形式）**，**没修昵称（list 形式可信块）**。这是「文档声称 ≠ 代码事实」里最贵的一条。
 
-**修法方向（不改行为也能修）**：`is_owner` 只认 `uid in OWNER_IDS`（生产已配 `<OWNER_UID>`），把 `speaker == "主人"` 这条降级为「仅当 uid 为空时用于桌宠/兼容」或直接删掉；`OWNER_LABEL` 应只作展示，不作协议（:2155 的注释自己就说了「展示给人看的措辞」和「机器判断的协议」不该同一个串）。
+**修法方向（不改行为也能修）**：`is_owner` 只认 `uid in OWNER_IDS`（生产已配 `10000001`），把 `speaker == "主人"` 这条降级为「仅当 uid 为空时用于桌宠/兼容」或直接删掉；`OWNER_LABEL` 应只作展示，不作协议（:2155 的注释自己就说了「展示给人看的措辞」和「机器判断的协议」不该同一个串）。
 
 ### 8.6 P0-1：生产 `role_model.json` 里躺着测试哨兵 key【实测】
 
@@ -498,7 +498,7 @@ _role_key(ROLE) → 'sk-SHOULD-NOT-WRITE'（长度 19）
 | 其它 | False | `qq:{标签}`（认不出 → 走过滤分支 → 只读同键） |
 
 **说话人前缀**在 `handle_chat` 拼（:1475-1476）：`tag = f"[{channel}] "`，`spoken = f"{tag}{speaker}: {text}"`（没 speaker 就 `f"{tag}{text}"`）。生产库里的样子：`[私聊] 主人: 记好了，是11月1号`、`[群聊·示例群] 群友甲: …`、桌宠是无前缀的 `主人: …`（因为 `channel=""`）。
-**主人前缀**：`/v1` 里若 `identity.is_owner and identity.speaker` → `speaker = OWNER_LABEL`（:2929-2930）。⚠ 但随后 `handle_chat` 会被 `identity` **覆盖回去**（:1449 `speaker = identity.speaker`），所以**这个改写实际无效**——库里存的是昵称（如「主人」），不是「主人」（实测：`[私聊] 主人: 在吗`）。
+**主人前缀**：`/v1` 里若 `identity.is_owner and identity.speaker` → `speaker = OWNER_LABEL`（:2929-2930）。⚠ 但随后 `handle_chat` 会被 `identity` **覆盖回去**（:1449 `speaker = identity.speaker`），所以**这个改写实际无效**——库里存的是昵称（如「晓」），不是「主人」（实测：`[私聊] 晓: 在吗`）。
 
 ### 9.2 `hide_private` 怎么防止群友看到主人的私有工具记录
 
@@ -508,10 +508,10 @@ _role_key(ROLE) → 'sk-SHOULD-NOT-WRITE'（长度 19）
 
 【实测】群友在群里请求看到的只有本群那一行；桌宠的私房话、主人的工具往返、QQ 私聊全部不可见。
 
-**但有一个反方向的洞（P1-2）**：`hide_private` 的判定是 `speaker not in ("", OWNER_LABEL)`（:1144），**不看 `Identity.is_owner`**。主人用 QQ 时昵称往往不是字面「主人」（生产里就是「主人」），而 uid 命中了 `owner_ids` → `Identity.is_owner=True` 但 `hide_private=True`：
+**但有一个反方向的洞（P1-2）**：`hide_private` 的判定是 `speaker not in ("", OWNER_LABEL)`（:1144），**不看 `Identity.is_owner`**。主人用 QQ 时昵称往往不是字面「主人」（生产里就是「晓」），而 uid 命中了 `owner_ids` → `Identity.is_owner=True` 但 `hide_private=True`：
 - 主人的工具往返被滤掉（他自己看不到自己刚批过什么）；
 - 来源过滤被强制成 `qq_private` → **桌宠里说的话他读不到**。
-【实测】`Identity(speaker='主人', uid=<OWNER_UID>)` → 只看到 `[私聊] 主人: 只有私聊的这句`；`speaker='主人'` 的旧路能看到全部 4 条。
+【实测】`Identity(speaker='晓', uid=10000001)` → 只看到 `[私聊] 主人: 只有私聊的这句`；`speaker='主人'` 的旧路能看到全部 4 条。
 方向是 fail-closed（不泄漏），所以是**功能/一致性缺陷**而非安全洞，但它直接违反 `build_messages` docstring（:1106「speaker: 说话人。不是主人时，历史里会滤掉主人的文件操作」）。
 
 ---
@@ -626,7 +626,7 @@ maybe_speak(signals: dict, st: dict) -> tuple[dict | None, str]     # role_speak
 | ID | 问题 | 证据 |
 |---|---|---|
 | **P1-1** | **跨渠道审批互锁**：`pending` 表 PK 是 `session`（全局只有 main 一行），`peek/take` 按 origin 匹配 → 桌宠挂起一件后，QQ 私聊主人既**确认不了**也**挂不了新件**，互锁 300 秒，且**没有任何「去另一个渠道确认」的提示** | gateway.py:630-637、:813-863、:1496-1498；实测：QQ 私聊说「好」→ `status=ok`（当普通聊天），待办仍在；再挂新件 → `approval_busy` |
-| **P1-2** | **`hide_private` 把主人当陌生人**：判定用 `speaker not in ("", OWNER_LABEL)`，不看 `is_owner`。主人 QQ 昵称不是字面「主人」时（生产就是「主人」）→ 自己的工具往返被滤、桌宠上下文读不到 | gateway.py:1144；实测：`speaker='主人'+uid 命中 owner_ids` → 只看到 1 条私聊，桌宠那 2 条不可见 |
+| **P1-2** | **`hide_private` 把主人当陌生人**：判定用 `speaker not in ("", OWNER_LABEL)`，不看 `is_owner`。主人 QQ 昵称不是字面「主人」时（生产就是「晓」）→ 自己的工具往返被滤、桌宠上下文读不到 | gateway.py:1144；实测：`speaker='晓'+uid 命中 owner_ids` → 只看到 1 条私聊，桌宠那 2 条不可见 |
 | **P1-3** | **`approval_busy` 的回复不落库**：status 既非 `ok` 也非 `approval`，assistant 分支不写 → 下一轮模型看到「主人说了要求、她一个字没回」 | gateway.py:1638-1645 与 :1696-1701；实测 turns 只有 1 条 user |
 | **P1-4** | **`qq_unknown` 不是「什么都看不到」，而是「桶内全部互相可见」**：`channel = 'qq_unknown'` 是等值匹配，所以任何认不出来源的调用者都能读到别人的 `qq_unknown` 行 + 插件注入的 `[系统任务：主动对话]` | gateway.py:798-806；migrate_channel.py:17-18/92 注释宣称「过滤时什么都看不到」；实测 3 行互相可见；生产该桶有 27 行 |
 | **P1-5** | `/v1` 无 token 即可用主人的 key（已知设计缺陷，非回归） | gateway.py:179-184、:2562-2568；实测 200；`v1.log` 里 401 条 learn_task 说明这条口被大量使用 |
@@ -711,7 +711,7 @@ maybe_speak(signals: dict, st: dict) -> tuple[dict | None, str]     # role_speak
 | `dialog.max_sentences` | 3 | config.json:10 | 普通回复句数上限 |
 | `RECITE_MAX_SENTENCES` | 16 | :2262 | 背诵/朗读放宽 |
 | `LIVING_MEMORY_MAX` / `MEME_PROMPT_MAX` / `RECALL_BLOCK_MAX` | 4000 / 3000 / 2000 | :1063-1067 | 注入块上限 |
-| `OWNER_IDS` | `{"<OWNER_UID>"}` | :2123 / config.json:14-16 | 主人 QQ 号 |
+| `OWNER_IDS` | `{"10000001"}` | :2123 / config.json:14-16 | 主人 QQ 号 |
 | `OWNER_LABEL` | `"主人"` | :2124 | 展示标签（**被当协议用了，见 P0-2**） |
 | `PENDING` 一次性语义 | 同 session 已有未确认 → 不覆盖 | :813-834 | — |
 | `hands.roots` | `["sandbox"]` | config.json:19-21 | 唯一可写范围 |

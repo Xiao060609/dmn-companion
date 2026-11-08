@@ -277,7 +277,7 @@ UnicodeEncodeError: 'gbk' codec can't encode character '\u2705'
 | `novelty_grams.json.polluted-by-test-20261104` | 799 B | 2026-11-04 19:54 | 污染样本留存（安全网） |
 | `people\owner.json` | 445 B | 2026-11-04 20:36 | 主人画像 |
 | `people\qq_group_示例群__c260963ae2.json` | 477 B | 2026-11-03 01:06 | 群画像（哈希后缀） |
-| `persona_sync.json` | 54 B | 2026-11-07 14:45【我跑 state_health 导致】 | `{"db":"<SYNC_HASH>","file":"<SYNC_HASH>"}` 两侧一致 |
+| `persona_sync.json` | 54 B | 2026-11-07 14:45【我跑 state_health 导致】 | `{"db":"b21841dd98aee985","file":"b21841dd98aee985"}` 两侧一致 |
 | `role_model.json` | 211 B | 2026-11-05 14:20 | 角色层模型 |
 | `system_model.json` | 195 B | 2026-11-05 14:20 | 系统层模型 |
 | `gateway.token` | 48 B | 2026-11-02 11:15 | 鉴权 token |

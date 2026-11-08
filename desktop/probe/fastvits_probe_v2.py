@@ -13,7 +13,7 @@ import os
 import sys
 import time
 
-OUTDIR = r"C:\Users\<USER>\AppData\Local\Temp\opencode\fastvits_probe"
+OUTDIR = r"C:\Users\Xiao\AppData\Local\Temp\opencode\fastvits_probe"
 WM_COPYDATA = 0x004A
 
 user32 = ctypes.windll.user32

@@ -13,7 +13,8 @@
     "max_tool_rounds": 4,
     "owner_ids": [
       "10000001"
-    ]
+    ],
+    "//owner_ids": "这里只放占位值。真实的 QQ 号放在 data/identity.json（该文件在 .gitignore 里，不会提交），它优先于本文件。也可以在后台「身份」卡片里改，会写进 data/identity.json。"
   },
   "hands": {
     "roots": [
@@ -47,10 +48,10 @@
   "system": {
     "enabled": true,
     "provider": "dashscope",
-    "base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "model": "deepseek-v4.1-flash-1017",
+    "base": "https://apihub.agnes-ai.com/v1",
+    "model": "agnes-3.0-flash",
     "key": "",
-    "timeout_s": 30,
+    "timeout_s": 120,
     "temperature": 0.2,
     "max_tokens": 300,
     "heartbeat_s": 300,

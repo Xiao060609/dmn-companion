@@ -1,0 +1,29 @@
+# 小鱼 · 顶层依赖
+#
+# 分三档装，别一次装完：
+#   1. 最小可跑（只要网关能对话）—— 纯标准库，什么 pip 包都不用装
+#   2. 长期记忆（向量检索 + 全文检索）
+#   3. 本地嵌入（不联网、不花钱，但要 torch 约 1.5 GB 磁盘）
+#
+# 用法：
+#   pip install -r requirements.txt              # 档 1+2（推荐起步）
+#   pip install -r requirements-local-embed.txt  # 再加档 3
+
+# ---------------------------------------------------------------- 档 2：记忆层
+# 向量检索
+faiss-cpu>=1.8.0
+numpy>=1.24
+# 中文分词（FTS5 检索用）
+jieba>=0.42
+# ORM（document_storage 用）
+sqlalchemy>=2.0
+sqlmodel>=0.0.14
+# ⚠ greenlet 是 SQLAlchemy async 的**隐式**依赖：不装它
+#   `from sqlalchemy.ext.asyncio import create_async_engine` 直接 ImportError
+greenlet>=3.0
+aiosqlite>=0.20
+aiofiles>=23.0
+networkx>=3.0
+
+# ---------------------------------------------------------------- 档 3：本地嵌入
+# 见 requirements-local-embed.txt（单独一个文件，因为体积大）

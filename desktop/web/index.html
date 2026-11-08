@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小菲鱼 · 后台控制台</title>
+<link rel="stylesheet" href="/console.css">
+<script>
+/* 顶栏自检（必须在 console.js 之前跑，且不依赖任何外部资源）。
+ *
+ * 为什么要它：出现过「页面全白 / 没样式」但服务端逐字节正常的情况，
+ * 从服务器侧怎么测都测不出来 —— 因为坏的是浏览器那个标签页的加载过程。
+ * 这段代码只做一件事：把「样式到了没、JS 跑了没」直接写进标题栏，
+ * 让页面自己说清断在哪一步，而不是让人对着白屏猜。
+ */
+(function () {
+  window.__consoleAlive = true;
+
+  function paint(text, bad, detail) {
+    var host = document.querySelector("header") || document.body;
+    if (!host) return;
+    var tag = document.getElementById("boot-diag");
+    if (!tag) {
+      tag = document.createElement("div");
+      tag.id = "boot-diag";
+      // 内联样式：CSS 没到的时候也要看得见
+      tag.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:99999;"
+        + "padding:12px 16px;font:13px/1.7 monospace;white-space:pre-wrap;"
+        + "max-height:42vh;overflow:auto;";
+      document.body.appendChild(tag);
+    }
+    tag.style.background = bad ? "#3a0d0d" : "#0d2318";
+    tag.style.borderTop = "2px solid " + (bad ? "#ff6b6b" : "#2ea043");
+    tag.style.color = bad ? "#ffb3b3" : "#8ee0a8";
+    tag.textContent = text + (detail ? "\n" + detail : "");
+    tag.dataset.bad = bad ? "1" : "0";
+  }
+
+  // 用 XHR 真去要一次，拿到确切的 status / 错误码 —— 这是唯一能说明问题的证据
+  function probe(url, cb) {
+    var x = new XMLHttpRequest();
+    x.open("GET", url, true);
+    x.onload = function () {
+      cb("status=" + x.status + (x.status === 200
+        ? " len=" + (x.responseText || "").length
+        : " body=" + String(x.responseText || "").slice(0, 80)));
+    };
+    x.onerror = function () { cb("网络层失败（请求没拿到响应）"); };
+    x.ontimeout = function () { cb("超时"); };
+    x.timeout = 5000;
+    x.send();
+  }
+
+  function sheetsOk() {
+    try {
+      var ss = document.styleSheets || [];
+      if (!ss.length) return "0 张样式表";
+      var rules = -1;
+      try { rules = ss[0].cssRules ? ss[0].cssRules.length : -1; }
+      catch (e) { return "样式表存在但读不到规则（" + e.name + "）"; }
+      return ss.length + " 张样式表，首张 " + rules + " 条规则";
+    } catch (e) {
+      return "取样式表失败: " + e.message;
+    }
+  }
+
+  function check() {
+    var jsOk = !!window.__consoleJsLoaded;
+    var cssDesc = sheetsOk();
+    // 只有「有样式表 且 首张有规则」才算 CSS 真的生效
+    var cssOk = /张样式表，首张 \d+ 条规则/.test(cssDesc)
+      && parseInt(cssDesc.match(/首张 (\d+)/)[1], 10) > 0;
+
+    if (jsOk && cssOk) {
+      paint("· 正常", false, "");
+      return;
+    }
+
+    var lines = [
+      "CSS: " + (cssOk ? "已生效" : "没生效") + "  (" + cssDesc + ")",
+      "JS : " + (jsOk ? "已执行" : "没执行") + "  (window.__consoleJsLoaded=" + jsOk + ")",
+      "页面 URL: " + location.href,
+    ];
+    paint("· 加载失败：外链资源没到", true, lines.join("\n"));
+
+    // 再实测一次两个资源，把结果补上去
+    var pend = 2, extra = [];
+    function done() {
+      if (--pend > 0) return;
+      paint("· 加载失败：外链资源没到", true,
+        lines.concat(extra).join("\n"));
+    }
+    probe("/console.css", function (r) { extra.push("实测 /console.css -> " + r); done(); });
+    probe("/console.js", function (r) { extra.push("实测 /console.js  -> " + r); done(); });
+  }
+
+  if (document.readyState === "complete") setTimeout(check, 0);
+  else window.addEventListener("load", function () { setTimeout(check, 0); });
+  setTimeout(check, 3000);
+})();
+</script>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>小菲鱼 · 后台</h1>
+    <span class="sub">人物在桌面上，这里只负责对话和设置</span>
+    <span class="spacer"></span>
+    <span class="pill" id="pill-tts"><i></i><span>语音连接中…</span></span>
+    <span class="pill" id="pill-agent"><i></i><span>智能体</span></span>
+    <span class="pill" id="pill-events"><i></i><span>桌宠 0</span></span>
+    <button id="btn-log" class="ghost log-toggle" aria-expanded="false" title="展开 / 收起对话记录">
+      <span>对话记录</span><b id="log-badge" class="hidden">0</b>
+    </button>
+  </header>
+
+  <main id="main" class="collapsed">
+    <section id="chat-panel">
+      <div id="log"></div>
+      <div id="composer">
+        <input id="input" type="text" placeholder="和小菲鱼说点什么…（Enter 发送）" autocomplete="off" spellcheck="false">
+        <button id="btn-send">发送</button>
+      </div>
+    </section>
+
+    <aside>
+      <div class="card">
+        <h2>身份</h2>
+        <p>这里定义<b>「谁是她主人」</b>和<b>「她叫什么」</b>。改完立刻生效，不用重启。</p>
+        <div class="stack">
+          <div class="kv"><span>主人 QQ 号</span><b></b></div>
+          <div id="id-owner-grid" class="keys-grid"></div>
+          <div class="key-add single">
+            <input id="id-owner-new" class="field" type="text" inputmode="numeric"
+                   placeholder="输入 QQ 号，例如 10000001" autocomplete="off" spellcheck="false">
+            <button id="btn-id-owner-add" class="ghost">添加</button>
+          </div>
+          <p class="hint" style="margin:0">只有这些号发来的消息，她才会当成<b>主人</b>；其他人都算<b>路人</b>。<b>昵称不算数</b>——昵称谁都能改，只认 QQ 号。</p>
+          <input id="id-name" class="field" type="text" placeholder="她叫什么，例如 小菲鱼" autocomplete="off">
+          <div class="row">
+            <button id="btn-id-save" class="ghost" style="flex:1">保存</button>
+          </div>
+          <div class="kv"><span>现在生效</span><b id="id-current">—</b></div>
+          <p class="hint" id="id-result" style="margin:0"></p>
+          <p class="hint">改名字会影响：标头署名、唤醒词、人格里的自称。一个主人都没配也可以——那就谁都不算主人。</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>让桌宠说话</h2>
+        <p>文字会推送到桌面窗口，由那里出声和做口型。</p>
+        <div class="stack">
+          <input id="say-text" class="field" type="text" value="我在这里，有什么事吗？" autocomplete="off">
+          <div class="row">
+            <select id="say-emotion" class="field" style="flex:2">
+              <option value="">默认表情</option>
+              <option value="happy">开心 happy</option>
+              <option value="joy">雀跃 joy</option>
+              <option value="love">喜欢 love</option>
+              <option value="shy">害羞 shy</option>
+              <option value="sad">难过 sad</option>
+              <option value="angry">生气 angry</option>
+              <option value="confused">疑惑 confused</option>
+              <option value="surprised">惊讶 surprised</option>
+              <option value="dark">黑化 dark</option>
+              <option value="speechless">无语 speechless</option>
+            </select>
+            <button id="btn-say" class="ghost" style="flex:1">说</button>
+          </div>
+          <input id="say-tone" class="field" type="text" placeholder="语气（可选）：哽咽着说，声音发抖" autocomplete="off">
+          <div class="row">
+            <button id="btn-tts-cache" class="ghost" style="flex:1">语音缓存</button>
+          </div>
+          <p id="tts-cache-state" class="hint" style="margin:0"></p>
+          <p class="hint">语气只描述怎么念。留空就用情绪对应的默认语气。「语音缓存」会打开刚生成的语音文件所在的文件夹。</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>对话模型</h2>
+        <p>角色层用哪个模型说话。切到云端会联网，聊天内容会发给对应服务商。</p>
+        <div class="stack">
+          <div class="row">
+            <select id="lm-mode" class="field" style="flex:1">
+              <option value="local">本地模型</option>
+              <option value="cloud">云端模型</option>
+            </select>
+            <select id="lm-provider" class="field" style="flex:1"></select>
+          </div>
+          <input id="lm-base" class="field" placeholder="服务地址（https://…/v1）" autocomplete="off">
+          <input id="lm-model" class="field" placeholder="模型名" autocomplete="off">
+          <div class="row">
+            <button id="btn-lm-save" class="ghost" style="flex:1">保存并试连</button>
+          </div>
+          <div class="kv"><span>当前</span><b id="lm-current">—</b></div>
+          <div class="kv"><span>密钥</span><b id="lm-key-state">—</b></div>
+          <p class="hint">用哪把 key 由下面的「API 密钥」决定。</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>系统模型</h2>
+        <p>系统层（心跳 / 记忆巩固 / 人格复盘 / 体检）用哪个模型。和「对话模型」<b>各自独立</b>——两层用不同服务商或不同 key 都行，出问题能定位是哪层挂。</p>
+        <div class="stack">
+          <div class="row">
+            <select id="sm-provider" class="field" style="flex:1"></select>
+          </div>
+          <input id="sm-base" class="field" placeholder="服务地址（https://…/v1）" autocomplete="off">
+          <input id="sm-model" class="field" placeholder="模型名" autocomplete="off">
+          <input id="sm-key" class="field" type="password" placeholder="API Key（留空 = 不改现有的）" autocomplete="new-password">
+          <div class="row">
+            <button id="btn-sm-save" class="ghost" style="flex:1">保存并试连</button>
+          </div>
+          <div class="kv"><span>当前</span><b id="sm-current">—</b></div>
+          <div class="kv"><span>密钥</span><b id="sm-key-state">—</b></div>
+          <p class="hint">留空密钥就沿用现在那把。切换前会先试连一次，连不上不会切。</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>每日梳理期</h2>
+        <p>系统层的<b>第二层节律</b>。5 分钟心跳只做被动反应（有变化才动），这一层每天挑个安静的时候回头看一眼：哪句话说得不对、他最近怎么样、下次该怎么说。<b>产出只进内心OS，说不说仍由角色层决定。</b></p>
+        <div class="stack">
+          <div class="kv"><span>状态</span><b id="dr-enabled">—</b></div>
+          <div class="kv"><span>现在会跑吗</span><b id="dr-gate">—</b></div>
+          <div class="kv"><span>上次梳理</span><b id="dr-last">—</b></div>
+          <div class="kv"><span>今天的对话</span><b id="dr-today">—</b></div>
+          <div class="kv"><span>他多久没来</span><b id="dr-absence">—</b></div>
+          <div class="kv"><span>可跑的活动</span><b id="dr-eligible">—</b></div>
+          <div class="row">
+            <button id="btn-dr-run" class="ghost" style="flex:1">现在梳理一次</button>
+          </div>
+          <div id="dr-recent"></div>
+          <p class="hint">日窗口从 <b>06:00</b> 起算（主人常弄到一两点，按 00:00 切会把一次熬夜拆成两天）；21:00 之后且安静满 2 小时才跑，一天最多一次。他一天没说话也算素材——缺席本身就是内容。</p>
+        </div>
+
+        <div class="card">
+          <h2>主动说话</h2>
+          <p>她会不会<b>自己开口</b>。开着的时候，后台每 5 分钟检查一次有没有值得在意的变化，有就由角色层决定说不说、说什么，然后推到这里——<b>桌面冒出气泡，还会出声</b>。</p>
+          <div class="stack">
+            <div class="kv"><span>总开关</span><b id="ps-enabled">—</b></div>
+            <div class="kv"><span>现在能说吗</span><b id="ps-gate">—</b></div>
+            <div class="kv"><span>今天说了</span><b id="ps-quota">—</b></div>
+            <div class="kv"><span>上次开口</span><b id="ps-last">—</b></div>
+            <div class="kv"><span>桌宠在线</span><b id="ps-desktop">—</b></div>
+            <div class="row">
+              <button id="btn-ps-toggle" class="ghost" style="flex:1">打开</button>
+            </div>
+            <p class="hint"><b>默认是关的。</b>它跟被动回复是两条线：关掉只是她不再主动开口，你找她说话照常。冷却 <b id="ps-cooldown">30</b> 分钟、每天最多 <b id="ps-max">6</b> 句——打开之后如果她还是不说话，多半是这两道闸之一在拦，上面「现在能说吗」会直接告诉你卡在哪。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>API 密钥</h2>
+        <p>可以存多把，点卡片就切过去。切换前会先试连一次，连不上不会切。</p>
+        <div id="keys-grid" class="keys-grid"></div>
+        <div class="key-add">
+          <input id="key-new-label" class="field" placeholder="备注（可选），例如 主号" autocomplete="off">
+          <input id="key-new-value" class="field" type="password" placeholder="粘贴 key" autocomplete="new-password">
+          <button id="btn-key-add" class="ghost">添加并切换</button>
+        </div>
+        <div class="key-add single">
+          <input id="key-probe-value" class="field" type="password" placeholder="还没定的一把 key，先在这儿试试" autocomplete="new-password" spellcheck="false">
+          <button id="btn-key-probe" class="ghost">测试这把</button>
+        </div>
+        <div class="row hidden" id="key-probe-actions" style="margin-top:8px">
+          <button id="btn-key-probe-add" class="ghost">加入列表并切换</button>
+        </div>
+        <p class="hint" id="key-probe-result">测通了再点「加入列表」；测试本身不会把 key 存进钥匙串。</p>
+        <p class="hint">明文只存在网关本机，这里显示的一律是打码后的样子。</p>
+      </div>
+
+      <div class="card">
+        <h2>群聊唤醒</h2>
+        <p>群里出现这些词，她才会醒过来接话。</p>
+        <div id="wk-grid" class="keys-grid"></div>
+        <div class="key-add single">
+          <input id="wk-new" class="field" placeholder="输入一个关键词，例如 小鱼" autocomplete="off">
+          <button id="btn-wk-add" class="ghost">添加</button>
+        </div>
+        <div class="kv" style="margin-top:10px"><span>当前生效</span><b id="wk-current">—</b></div>
+        <p class="hint">改完立刻生效，不用重启 AstrBot。全部删掉就只靠 @ 她来唤醒。</p>
+      </div>
+
+      <div class="card">
+        <h2>自定义触摸区域</h2>
+        <p>摸她不同地方会说不同的话。这里改「摸哪儿算哪个部位」：在模型身上画矩形或圆形，画到的地方就归这个区域。</p>
+        <div id="touch-grid" class="keys-grid"></div>
+        <div class="row" style="margin-top:10px">
+          <button id="btn-touch-reset" class="ghost">恢复默认</button>
+        </div>
+        <p class="hint" id="touch-hint">改完点确定，桌宠立刻就按新的判定，不用重启。</p>
+      </div>
+
+      <div class="card">
+        <h2>运行状态</h2>
+        <div class="kv"><span>语音引擎</span><b id="st-tts">—</b></div>
+        <div class="kv"><span>智能体</span><b id="st-agent">—</b></div>
+        <div class="kv"><span>桌宠连接</span><b id="st-events">—</b></div>
+        <div class="kv"><span>人物模型</span><b id="st-model">—</b></div>
+        <div class="kv"><span>QQ 托管</span><b id="st-qq">—</b></div>
+        <div class="row" style="margin-top:10px">
+          <button id="btn-qq-toggle" class="ghost">开启托管</button>
+        </div>
+        <p class="hint">只动 SnowLuma 和 AstrBot，不碰桌宠和网关。起停都要十几秒。</p>
+        <div class="row" style="margin-top:12px">
+          <button id="btn-reset" class="ghost">清空记忆</button>
+          <button id="btn-reload" class="ghost">刷新状态</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>她现在的状态</h2>
+        <p>系统层每隔几分钟醒一次；只有「有新对话」或「你在不在变了」才真的动脑，否则直接跳过。</p>
+        <div class="kv"><span>心情</span><b id="dm-mood">—</b></div>
+        <div class="kv"><span>在意的事</span><b id="dm-focus">—</b></div>
+        <div class="kv"><span>内心OS</span><b id="dm-inner">—</b></div>
+        <div class="kv"><span>上次冒念头</span><b id="dm-tick">—</b></div>
+        <div class="kv"><span>上次主动说话</span><b id="dm-speak">—</b></div>
+        <div class="kv"><span>今日主动</span><b id="dm-count">—</b></div>
+        <div class="row" style="margin-top:10px">
+          <button id="btn-dm-tick" class="ghost">让她现在想一次</button>
+          <button id="btn-dm-refresh" class="ghost">刷新</button>
+        </div>
+        <p class="hint" id="dm-tip">「上次冒念头」只在真有变化时才更新；没变化她会跳过，所以这个时间可能比心跳间隔久。</p>
+      </div>
+
+      <div class="card">
+        <h2>内心OS</h2>
+        <p>她自己冒出来的想法。你下次在桌宠或私聊里说话时，她读一遍就清空——所以这里列的是「还没说出口的那些」。</p>
+        <div id="inner-list" class="keys-grid"></div>
+        <div class="row" style="margin-top:10px">
+          <button id="btn-inner-consolidate" class="ghost">立刻巩固一次</button>
+          <button id="btn-inner-clear" class="ghost">清空队列</button>
+        </div>
+        <p class="hint" id="inner-tip">巩固一天一次，把最近的对话蒸馏成观点；刚巩固过可能没有新内容。</p>
+      </div>
+
+      <div class="card">
+        <h2>其它入口</h2>
+        <p>
+          <a href="/pet" target="_blank" rel="noopener">在浏览器里预览桌宠页</a><br>
+          <a href="/stage" target="_blank" rel="noopener">调试页（带输入框的完整舞台）</a>
+        </p>
+        <p style="margin:0">桌宠窗口：右键出轮盘菜单（「后台」也在里面），拖动可移动，轻点她会摸头。</p>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<div id="touch-editor" class="modal hidden">
+  <div class="modal-box">
+    <header>
+      <h3 id="te-title">自定义触摸区域</h3>
+      <button id="te-close" class="ghost">关闭</button>
+    </header>
+    <div class="te-toolbar">
+      <button id="te-rect" class="ghost active">矩形</button>
+      <button id="te-ellipse" class="ghost">圆形</button>
+      <span class="te-sep"></span>
+      <button id="te-undo" class="ghost">撤销</button>
+      <button id="te-del" class="ghost">删除选中</button>
+      <button id="te-clear" class="ghost">全部清空</button>
+      <span class="te-count" id="te-count">0 个图形</span>
+    </div>
+    <div class="te-stage"><iframe id="te-frame" src="about:blank"></iframe></div>
+    <footer>
+      <span class="hint" id="te-tip">在模型身上拖一下就画出一个；点已有的图形可以选中。</span>
+      <button id="te-cancel" class="ghost">取消</button>
+      <button id="te-save">确定</button>
+    </footer>
+  </div>
+</div>
+
+<div id="voice-editor" class="modal hidden">
+  <div class="modal-box voice-box">
+    <header>
+      <h3 id="ve-title">触摸台词</h3>
+      <button id="ve-close" class="ghost">关闭</button>
+    </header>
+    <div class="ve-body">
+      <p class="hint">摸到这块时她会说的话。情绪只影响语气（快慢、气息），不会换声音。</p>
+      <div id="ve-list"></div>
+      <button id="ve-add" class="ghost" style="margin-top:10px">添加一句</button>
+    </div>
+    <footer>
+      <span class="hint" id="ve-tip">确定后会删掉旧语音，并按新台词重新合成，需要几秒。</span>
+      <button id="ve-cancel" class="ghost">取消</button>
+      <button id="ve-save">确定</button>
+    </footer>
+  </div>
+</div>
+
+<script src="/console.js"></script>
+</body>
+</html>

@@ -1,0 +1,168 @@
+{
+  "port": 8898,
+  "host": "127.0.0.1",
+  "endpoint": {
+    "base": "http://127.0.0.1:1234/v1",
+    "model": "gemma-4-e4b",
+    "timeout_s": 30
+  },
+  "dialog": {
+    "max_sentences": 3,
+    "history_turns": 30,
+    "//max_tool_rounds": "角色层一轮对话最多连着调几轮工具（2026-11-07 从 system 段挪过来）。为什么是 4 不是 3：搜索天然要多轮（先搜、结果不对再细化、再搜、最后总结），实测三轮经常刚好用完、一句答案都没说。用满之后还有一次「不给工具」的收尾调用，所以最坏是 5 次。取值夹在 [1,8]",
+    "max_tool_rounds": 4,
+    "owner_ids": [
+      "10000001"
+    ]
+  },
+  "hands": {
+    "roots": [
+      "sandbox"
+    ],
+    "deny_globs": [
+      "*/.ssh",
+      "*/.ssh/*",
+      "*/id_rsa*",
+      "*/id_ed25519*",
+      "*/.env",
+      "*/.env.*",
+      "*/secrets.json",
+      "*/credentials*",
+      "*/.git/*",
+      "*/appdata/*",
+      "*/ntuser.dat",
+      "*/cookies*",
+      "*/desktop.ini"
+    ],
+    "write_ext": [
+      ".txt",
+      ".md",
+      ".json",
+      ".log",
+      ".csv"
+    ],
+    "max_read_bytes": 200000,
+    "max_list_entries": 50
+  },
+  "system": {
+    "enabled": true,
+    "provider": "dashscope",
+    "base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "model": "deepseek-v4.1-flash-1017",
+    "key": "",
+    "timeout_s": 30,
+    "temperature": 0.2,
+    "max_tokens": 300,
+    "heartbeat_s": 300,
+    "cooldown_s": 1800,
+    "max_speak_per_day": 6,
+    "//inner_os_max_per_turn": "一轮对话最多注入几条内心OS。梳理期一次最多产十几条，全塞进去会变成一段几百字的自我提醒墙，把真正要紧的那条稀释掉。没被取走的保持 pending，下一轮还能取（不是丢弃）",
+    "inner_os_max_per_turn": 4,
+    "consolidate_s": 3600,
+    "consolidate_boot_delay_s": 90,
+    "consolidate_min_new_turns": 8,
+    "//consolidate_max_wait_hours": "最长等待：距上次成功巩固超过这么多小时、且有 >=2 条增量，就不等 min_new 门槛直接跑。0=关闭。低频使用（偶尔聊几句）靠它才能记住",
+    "consolidate_max_wait_hours": 12,
+    "consolidate_max_turns": 200,
+    "consolidate_max_tokens": 500,
+    "persona_review_min_turns": 8,
+    "people_channels": [
+      "pet",
+      "qq_group:*"
+    ],
+    "//events_kinds_stateful": "events 只当状态机用：只有这几类落库（带状态/要排班）。observation/emotion 照抽但不再进库——长期事实的唯一库是自建记忆层 gateway/memory/",
+    "events_kinds_stateful": [
+      "care_rejected",
+      "deferred_care",
+      "promise"
+    ],
+    "//long_memory_enabled": "自建长期记忆库（gateway/memory/）总开关。关掉后不写也不召回，可一键回滚",
+    "long_memory_enabled": true,
+    "//long_memory_db_path": "留空用 gateway/data/livingmemory.db（与插件同构，能直接读老数据）",
+    "long_memory_db_path": "",
+    "//embedding_provider": "向量化用哪个实现。dashscope=联网按次计费(text-embedding-v4)；local=本地 bge-large-zh-v1.5，零成本、不出机器。⚠ 两条路径的向量空间完全不同，切换后必须全量重算已有记忆向量，否则召回失效（见 audit/08-本地向量库部署方案.md）",
+    "embedding_provider": "local",
+    "local_embedding": {
+      "//": "仅 embedding_provider=local 时生效。模型放项目外，避免 1.3GB 进 git",
+      "model_name": "BAAI/bge-large-zh-v1.5",
+      "cache_dir": "G:\\models",
+      "device": "cpu",
+      "dim": 1024
+    },
+    "//long_memory_max_age_days": "（已弃用，2026-11-06）遗忘改由 forgetting.plan_prune 判定：R=e^(-t/S)。本项与 min_importance 仅在旧 prune() 里还生效",
+    "long_memory_max_age_days": 90,
+    "//long_memory_min_importance": "重要度门槛，低于它才可能被删（生日/承诺这类通常 >0.6，不会被清）",
+    "long_memory_min_importance": 0.3,
+    "//forgetting": "遗忘算法（能力 2）。R=e^(-t/S)：t=S 时 R≈0.37，t=3S 时 R≈0.05。R>keep_above 留、R<drop_below 且不是永不删类型就删、中间攒批给模型判「内容上还有没有用」",
+    "forgetting": {
+      "//keep_above": "留的门槛：R 高于它就一定留（取等算留）",
+      "keep_above": 0.5,
+      "//drop_below": "删的门槛：R 低于它、且不是永不删类型，就删（取等算删）",
+      "drop_below": 0.05,
+      "//per_recall_factor": "越用越熟：每次被召回，稳定性 ×1.5",
+      "per_recall_factor": 1.5,
+      "//default_stability_days": "按类型给的初始稳定性（天）。null = 永不删",
+      "default_stability_days": {
+        "promise": null,
+        "birthday": null,
+        "cognition": 90.0,
+        "observation": 30.0,
+        "emotion": 7.0
+      }
+    },
+    "//plan_silence_days": "计划（能力 5）：沉默期上限（天），**从计划创建时算**。满了就临期触发，提醒送到她面前就算触发（她选择不说也算）",
+    "plan_silence_days": 10,
+    "//mood": "心情（能力 4）：连续数值 + 档位名 + 理由，按需衰减（不跑定时器）。档位与速率写在 gateway/mood.py 的常量里（定稿：0.01/分钟、地板 ±0.5、加权 0.5/0.5）",
+    "//proactive_speak": "主动说话总开关（2026-11-08 加，默认关）。关掉时整条链路不跑 —— 连模型都不调，不只是沉默。为什么默认关：她会弹气泡 + 出声，这种能力不该装上就开着。后台「主动说话」卡片可以随时打开。",
+    "proactive_speak": {
+      "enabled": false
+    },
+    "desktop_base": "http://127.0.0.1:8848",
+    "//daily_review": "每日梳理期（第二层节律）。5 分钟心跳是被动反应层，一行不改；这一层负责「一天结束回头看一遍，决定要不要主动做点什么」。产出只进 inner_os，说不说永远由角色层决定。enabled=false 时连线程都不起",
+    "daily_review": {
+      "enabled": true,
+      "//enabled_note": "第二层节律：每天一次回头看。改这里要重启网关才生效",
+      "day_start_hour": 6,
+      "//day_start_hour": "「一天」= 06:00 → 次日 06:00。主人常弄到一两点，按 00:00 切会把一次熬夜拆成两天",
+      "//dual_gate": "===== 双判断（2026-11-04 T-12）===== 触发准则从「墙上时间」改成「信息量 + 昼夜节律」：① 有效新颖量 >= min_novel_chars → 立刻整理（纯代码判定，不再问模型）；② 每天到 earliest_hour 看一眼，由**模型**决定做不做（可以跳过）；③ 其余时间算「睡眠」，心跳照常但零成本。下面 earliest_hour / idle_after_minutes / once_per_day 仍然生效，它们是「允许跑」的前置闸，双判断决定「值不值得跑」",
+      "min_novel_chars": 60,
+      "//min_novel_chars": "有效新颖字数（不是总字数）。实测校准：1 条真新话≈34、2 条≈70.8，同一句重复说增量=0，62 条旧对话回放=0。60 ≈「聊了两三句有信息量的话」。⚠ 只算 role=user 且可信渠道（pet / qq_private / qq_group），系统自注入与 qq_unknown 不计；度量是「字数 × 新颖度」的乘积，不是字数",
+      "circadian_enabled": true,
+      "//circadian_enabled": "昼夜节律那条腿：到点让模型看一眼再决定。关掉后只剩信息量单判断",
+      "earliest_hour": 21,
+      "idle_after_minutes": 120,
+      "//idle_after_minutes": "要安静这么久才回头看。他还在聊就先不总结",
+      "once_per_day": true,
+      "window_missed": "skip",
+      "//window_missed": "通宵没安静下来就跳过，不补跑 —— 补跑会变成两天跑两次",
+      "ruminate_requires_today_turns": true,
+      "absence_is_material": true,
+      "//absence_is_material": "他没来这件事本身就是素材。关掉后零对话的日子完全不跑（会掐死「三天没来」场景）",
+      "min_absence_hours": 6,
+      "budget": {
+        "ruminate": 1,
+        "prospect": 1,
+        "theory_of_mind": 1,
+        "self_narrative": 1
+      },
+      "daily_model_calls_cap": 5,
+      "//inner_os_quota_per_review": "一次梳理最多把几条念头放进 inner_os。超出部分不丢：B 路照旧进画像（theory_of_mind 的结论）。⚠ 2026-11-07 起 C 路（沉淀进长期记忆）默认关闭，见 memory_sink_enabled；所以超出配额的那部分想法不会再进记忆库，用完即销毁。实测一次产出 12 条会把 INNER_OS_MAX=20 的队列挤爆（体检报积压）",
+      "inner_os_quota_per_review": 3,
+      "//memory_sink_enabled": "（2026-11-07 默认改为 false）反刍/预演的产物是否沉淀进长期记忆库。主人定稿：不进 —— 那两类的 prompt 要求的是场景推断（「他话说得少，可能累了」），属于想法不是事实，进库会持续污染召回（实测清空前 13 条里 6 条是这种、还有 2 组逐字重复）。关掉后它们只进 inner_os 想法队列，用完即销毁，这正是「想法上浮了就该消失」。留开关是为了回滚/对照实验",
+      "memory_sink_enabled": false,
+      "quiet_hours": [],
+      "check_s": 600,
+      "boot_delay_s": 90,
+      "//boot_delay_s": "起来先等这么久就立即判一次，不要先睡一整天（巩固线程踩过这个坑）"
+    }
+  },
+  "identity": {
+    "owner_ids": [
+      "10000001"
+    ],
+    "pet_name": "小菲鱼",
+    "pet_aliases": [
+      "小鱼"
+    ]
+  }
+}

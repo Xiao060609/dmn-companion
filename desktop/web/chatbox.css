@@ -1,0 +1,48 @@
+/* 桌宠对话输入框：灰色圆角长条，只有一个输入框 */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+}
+
+#box {
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding: 0 18px;
+  background: #3a3d43;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.38);
+  -webkit-app-region: no-drag;
+}
+
+#text {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  padding: 0;
+  margin: 0;
+  color: #f3f5f9;
+  caret-color: #8fb8ff;
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.4;
+  user-select: text;
+}
+
+#text::placeholder {
+  color: rgba(235, 240, 248, 0.42);
+}
+
+#text:disabled {
+  color: rgba(235, 240, 248, 0.5);
+}

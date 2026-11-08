@@ -1,0 +1,11 @@
+faiss-cpu>=1.8.0
+numpy>=1.24
+sqlalchemy>=2.0
+sqlmodel>=0.0.14
+# greenlet 是 SQLAlchemy async 的隐式依赖：不装它 `from sqlalchemy.ext.asyncio
+# import create_async_engine` 直接 ImportError，报错信息里才提示。
+greenlet>=3.0
+aiosqlite>=0.20
+aiofiles>=23.0
+jieba>=0.42
+networkx>=3.0

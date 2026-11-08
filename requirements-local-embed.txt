@@ -1,0 +1,24 @@
+# 本地嵌入（可选，不装也能跑 —— 用云端 embedding API）
+#
+# 为什么单独一个文件：这一档要下载 ~1.5 GB，而且 torch 的 CPU/CUDA 版本
+# 要从不同 index 装。放在主 requirements.txt 里会让"只想试一下"的人望而却步。
+#
+# 装法：
+#   pip install -r requirements-local-embed.txt
+#
+# ⚠ torch 建议先单独装 CPU 版（体积小 20 倍，这个用途不需要 GPU）：
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch
+#
+# 然后下载模型（约 1.2 GB，放项目外，别进 git）：
+#   python -c "from sentence_transformers import SentenceTransformer; \
+#              SentenceTransformer('BAAI/bge-large-zh-v1.5', cache_folder=r'G:\models')"
+#
+# 最后改 config.json：
+#   "system": { "embedding_provider": "local" }
+#
+# ⚠ 切换前必须重算所有已有记忆的向量 —— 两条路径的向量空间完全不同，
+#   混在一个索引里召回会失效。
+
+sentence-transformers>=2.2
+# torch 由上面的命令单独装（CPU 版），这里不锁版本避免和用户环境冲突
+# torch>=2.0

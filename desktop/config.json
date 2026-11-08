@@ -1,0 +1,51 @@
+{
+  "host": "127.0.0.1",
+  "port": 8848,
+
+  "//ops": "进程生命周期：启动连带拉起重资源，重启只重启轻的部分，退出才彻底释放",
+  "ops": {
+    "//dsh_exe": "DSH（DeepSeek Harness）可执行文件。留空或 manage_dsh=false 就不管它",
+    "dsh_exe": "G:\\DSH\\Fat_DSH\\DeepSeek Harness.exe",
+    "manage_dsh": true
+  },
+
+  "steam_workshop": "assets/steam_workshop/content/2488350",
+  "live2d_item": "3051599132",
+  "fastvits_item": "3010132930",
+  "vits_model_item": "3010104972",
+
+  "speaker": 126,
+  "length_scale": 1.0,
+  "noise_scale": 0.67,
+  "noise_scale_w": 0.8,
+
+  "max_chars": 200,
+  "tts_outdir": "tts_cache",
+  "start_tts_on_boot": true,
+
+  "tts_engine": "breeze",
+  "breeze_dir": "G:\\workplase\\Breeze-TTS-2.cpp\\breeze-tts-2-v0.1.3-windows-x64-vulkan",
+  "breeze_model": "breeze-tts-2-q8_0.gguf",
+  "breeze": {
+    "port": 8849,
+    "//voice_id": "saved voice 名字，锁死音色。留空则退回 voice design（每次现编一个声音，音色会漂）",
+    "voice_id": "xiaoyu",
+    "//instruction": "克隆模式下这是「语气方向」，只影响快慢和情绪，不改变是谁在说话",
+    "instruction": "语速放慢，节奏舒缓从容",
+    "cfg_scale": 1.5,
+    "seed": 42,
+    "max_new_tokens": 0,
+    "chunk_chars": 28,
+    "chunk_gap_ms": 250
+  },
+
+  "//hidden_parts": "模型里默认隐藏的部件 ID（与游戏 item.json 的处理保持一致）",
+  "hidden_parts": ["Part5"],
+
+  "agent": {
+    "enabled": true,
+    "cwd": "workspace",
+    "approval_mode": "auto",
+    "max_history": 8
+  }
+}

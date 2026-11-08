@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>小菲鱼 · 浏览器版</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="stage"><canvas id="canvas"></canvas></div>
+
+  <div id="bubble" class="bubble hidden"><span id="bubble-text"></span></div>
+
+  <div id="hud">
+    <div id="status"><i></i><span id="status-text">正在连接…</span></div>
+  </div>
+
+  <div id="dock">
+    <button id="btn-test" class="ghost" title="合成一句试听">试听</button>
+    <select id="expr" title="表情">
+      <option value="">表情：默认</option>
+    </select>
+    <input id="input" type="text" placeholder="和我说点什么…" autocomplete="off" spellcheck="false">
+    <button id="btn-send">发送</button>
+  </div>
+
+  <script src="/vendor/pixi.min.js"></script>
+  <script src="/vendor/live2dcubismcore.min.js"></script>
+  <script src="/vendor/cubism4.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

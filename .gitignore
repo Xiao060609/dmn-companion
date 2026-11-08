@@ -1,0 +1,120 @@
+# ============================================================================
+# 小鱼 · 仓库忽略规则
+# 目标：只让「一方源码 / 配置模板 / 文档 / 脚本」进仓库。
+# 第三方依赖、大体积素材、真实记忆库、密钥、日志、备份快照一律不入库。
+# 调整本文件后请用 `git status --porcelain | wc -l` 复核待提交数量。
+# ============================================================================
+
+# ---------- 依赖与构建产物 ----------
+node_modules/
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+out/
+.electron/
+*.asar
+
+# ---------- 大体积素材 / 第三方运行时 ----------
+# desktop：5.8G，绝大部分是 Live2D 素材与 vendor
+desktop/assets/
+desktop/web/vendor/
+desktop/desktop/node_modules/
+# desktop/probe 下是音色样本目录（大量 wav），只保留 .py 探针脚本
+desktop/probe/cry/
+desktop/probe/voice_candidates/
+desktop/probe/tone/
+desktop/probe/qq_tone/
+# qq：1.6G，几乎全是第三方
+qq/SnowLuma/
+qq/astrbot/
+qq/qq-bridge/
+qq/_归档/
+# 语音引擎 / 模型权重 / 二进制
+*.gguf
+*.exe
+*.dll
+*.so
+*.dylib
+*.pyd
+*.moc3
+*.model3.json
+*.physics3.json
+*.cdi3.json
+*.can3
+
+# ---------- 运行时数据（真实记忆与密钥，绝不入库） ----------
+gateway/secrets.json
+gateway/data/
+gateway/sandbox/
+desktop/tts_cache/
+# 桌宠的运行时状态（自定义触摸区域等），跟着机器走，不进库
+desktop/data/
+desktop/workspace/
+desktop/desktop/window-state.json
+qq/astrbot/data/
+
+# ---------- 日志 ----------
+**/*.log
+**/*.log.err
+**/*.out.log
+
+# ---------- 备份快照（手工 .bak 与整目录快照） ----------
+**/*.bak
+**/*.bak-*
+_backup-*/
+tmp/
+
+# ---------- 本机临时文件 ----------
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---------- 通用二进制/媒体（放在最后，确保上面的 re-include 不被覆盖） ----------
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.bmp
+*.ico
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.mp4
+*.zip
+*.7z
+*.rar
+*.db
+*.db-wal
+*.db-shm
+*.index
+*.faiss
+
+# ============================================================================
+# 说明：qq/astrbot 内含独立 .git（上游框架自带），根仓库不能把它当普通目录收录，
+# 否则会变成无内容的 gitlink / 坏 submodule。故整体排除，一方插件源码另行纳管
+# （见交付报告「遗留问题」）。qq/qq-bridge 同理，且已停用。
+# ============================================================================
+
+# 保留 Electron 图标（被上面的 *.png 规则误伤）
+!desktop/desktop/icon.png
+
+# ---------- 排障用的临时产物（2026-11-08 踩过） ----------
+# 排查后台白屏时在 audit/ 下生成过 Chrome 临时 profile，
+# 一次 `git add -A` 就把 220 个文件（含 Cookies / Login Data）提交进去了。
+# 这类目录一律不入库：体积大、含本机凭据、且随时可重建。
+audit/_chrome*
+audit/_shot*
+audit/_console_shot*
+audit/_idtest/
+audit/_sfail/
+audit/_cfg_before.json
+
+# 含真实聊天记录的原始文档，只留本地，不进公开仓库
+audit/_private/

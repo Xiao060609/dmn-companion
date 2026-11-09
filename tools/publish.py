@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 #: 源项目目录（含素材/依赖的那份）
-SRC = Path(r"<repo>")
+SRC = Path(r"G:\小鱼")
 #: 公开仓库目录（本仓库）
 DST = Path(__file__).resolve().parents[1]
 
@@ -39,24 +39,38 @@ KEEP = {
 }
 
 #: 源项目有、但不该公开
+#:
+#: ⚠ 这些名字**必须避讳**：不能和 DESENSITIZE 的规则撞上，否则会被改坏。
+#: 所以写成「前缀 + 后缀」拼接，而不是完整字面量。
 SKIP = {
-    "qq/部署记录.md",
+    "qq/" + "大" + "肥鱼" + "连接QQ-部署进度.md",
     "具体场景演示效果.html",
     "启动.bat", "安装.bat", "_launch.vbs",
 }
 
-#: 脱敏规则（一一对应，保持文档内部自洽）
+#: 脱敏规则（一一对应，保持文档内部自洽）。
+#:
+#: ⚠⚠ 2026-11-09 踩过一个大坑：这个列表**被它自己脱敏掉了**。
+#: 原来源码里直接写着 ("大肥鱼", "示例用户") 这样的字面量，
+#: 而 desensitize() 会遍历所有 .py，于是把它自己改成
+#: ("示例用户", "示例用户") —— 全套规则变成空操作，
+#: 而 SKIP 里的私密文件名也被替换，跳过规则失效，
+#: **含真实聊天记录的文档被同步进了公开仓库**。
+#:
+#: 现在的防御：
+#:   1. 敏感字面量**拆片段拼接**（"大" + "肥鱼"），运行时才拼成完整词；
+#:   2. desensitize() 的 NO_TOUCH 排除本文件（双保险）。
 DESENSITIZE = [
     # 先长后短，避免前缀被短规则先吃掉
-    ("示例用户", "示例用户"),
-    ("部署记录.md", "部署记录.md"),
-    ("示例用户", "示例用户"),
+    ("大" + "肥鱼" + "（｡ò ∀ ó｡）", "示例用户"),
+    ("大" + "肥鱼" + "连接QQ-部署进度.md", "部署记录.md"),
+    ("大" + "肥鱼", "示例用户"),
     ("\u0489X \u0489", "示例用户"),
-    ("示例群", "示例群"),
-    ("群友A", "群友A"),
-    ("10000001", "10000001"),
-    ("10000002", "10000002"),
-    ("旧项目", "旧项目"),
+    ("网络" + "避难所", "示例群"),
+    ("霖" + "粽", "群友A"),
+    ("3047" + "980857", "10000001"),
+    ("1075" + "92691", "10000002"),
+    ("QQ" + "小鱼", "旧项目"),
 ]
 
 #: 路径替换（正则，先长后短）
@@ -97,9 +111,18 @@ audit/_*test*.py
 
 
 def run(cmd: list[str], cwd: Path | None = None) -> str:
+    """跑命令并返回 stdout 文本。
+
+    ⚠ `-z` 的输出里是 `\0` 分隔 —— **不能配 `text=True`**：
+    subprocess 用文本模式时会把 `\0` 当异常或截断（实测直接返回空串），
+    于是 `sync_files()` 拿到空的跟踪列表，报「同步 0 个文件」，
+    而实际上文件根本没被比较过。这个坑让项目地图漏同步过一次。
+
+    所以这里统一拿 bytes，再由调用方决定怎么解码 / 切分。
+    """
     r = subprocess.run(cmd, cwd=str(cwd) if cwd else None,
-                       capture_output=True, text=True, encoding="utf-8")
-    return r.stdout or ""
+                       capture_output=True)
+    return r.stdout.decode("utf-8", "replace") if r.stdout else ""
 
 
 def sync_files() -> list[str]:
@@ -134,6 +157,14 @@ def sync_files() -> list[str]:
 
 def desensitize() -> int:
     """对公仓里所有文本文件做脱敏。返回修改的文件数。"""
+    #: 这些文件**不能**被脱敏 —— 它们本身就含路径/敏感词的字面量。
+    #:
+    #: ⚠ 2026-11-09 踩过的坑：publish.py 里的 `SRC = Path(r"G:\小鱼")`
+    #: 被自己改了，变成 `SRC = Path(r"<repo>")`，于是它读不到任何源文件、
+    #: 报「同步 0 个文件」。而 check_privacy.py 是跳过自己的，
+    #: publish.py 当时没跳 —— 自己把自己改瞎了。
+    NO_TOUCH = {"publish.py", "check_privacy.py"}
+
     n_files = 0
     for p in DST.rglob("*"):
         if not p.is_file() or p.suffix.lower() not in TEXT_SUFFIX:
@@ -141,8 +172,8 @@ def desensitize() -> int:
         if any(x in p.parts for x in
                (".git", "node_modules", ".venv", "__pycache__", "_private")):
             continue
-        # 不脱敏检查器自己（它的规则里必然含敏感词）
-        if p.name == "check_privacy.py":
+        # 工具脚本自身跳过：它们的规则里必然含敏感词/本机路径字面量
+        if p.name in NO_TOUCH:
             continue
         try:
             txt = p.read_text(encoding="utf-8")

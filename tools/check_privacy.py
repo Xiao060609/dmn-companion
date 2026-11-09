@@ -95,7 +95,10 @@ CHECKS: list[tuple[str, re.Pattern, str]] = [
     ),
     (
         "私密目录内容",
-        re.compile(r"audit[/\\]_private"),
+        # 只在**真的引用该目录下的文件**时报警。
+        # 单独提一句 `audit/_private/` 是用来警告"这里不能公开"的，
+        # 不算泄露 —— 所以要求路径后面还跟着具体文件名。
+        re.compile(r"audit[/\\]_private[/\\][\w\u4e00-\u9fff][^\s`'\"|）)]*"),
         "这个目录里是含真实聊天记录的原始文档，不该被引用或复制。"
     ),
 ]

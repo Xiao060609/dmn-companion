@@ -1201,21 +1201,32 @@ if (!gotLock) {
 
   // ---------------------------------------------------------------- GPU
   //
-  // ⚠ 2026-11-09 实测发现的问题：
-  // 桌宠窗口的 WebGL renderer 是
-  //     ANGLE (Microsoft, Microsoft Basic Render Driver, Direct3D11)
-  // 也就是 **Windows 的软件渲染兜底驱动，不是独显**。
-  // 后果：名为 `gpu-process` 的那个进程其实在用 CPU 做光栅化，
-  // 实测吃掉单核 21%，而同期网关（含向量库）只用了 1 秒。
+  // ⚠ 2026-11-09 的两次结论，**第一次是错的，别照那个改回去**。
   //
-  // 为什么会这样：这台机器有两个显示适配器
-  //     GameViewer Virtual Display Adapter（远程串流用的虚拟显示器）
-  //     NVIDIA GeForce RTX 4060 Laptop GPU
-  // Electron 默认拿到的是虚拟显示器那条路，它没有真 GPU 能力，
-  // 于是 Chromium 回退到 Basic Render Driver。
+  // 【错误结论，已推翻】
+  //   一开始我用「新建一个 canvas 然后 getContext('webgl')」去探测
+  //   桌宠用的渲染后端，读到
+  //       ANGLE (Microsoft, Microsoft Basic Render Driver, Direct3D11)
+  //   就判定「桌宠在用 CPU 软渲染、没挂独显」。
+  //   **这个测法是错的**：新建 canvas 拿到的是「默认适配器」的上下文，
+  //   和页面里已被 pixi 持有的那个上下文不是同一个。
   //
-  // 这三条是标准的「请用高性能 GPU」声明，Chromium 会据此挑适配器。
-  // 显式写 d3d11 是因为 ANGLE 在 Windows 上默认就可能选 D3D9/WARP。
+  // 【正确结论】
+  //   `nvidia-smi --query-compute-apps=pid` 里能直接看到本进程树的
+  //   `--type=gpu-process` 子进程，也就是说**它本来就在 RTX 4060 上**。
+  //   显存占用只有 124 MB，一点不多。
+  //   整机显存 6587/8188 MiB 的大头是 dwm（桌面合成）和
+  //   GameViewerServer（远程串流，4.2 GB），跟桌宠无关。
+  //
+  //   所以「卡」的主因不是显卡选错，而是远程串流的固有链路：
+  //   每一帧都要经 dwm 合成 -> GameViewer 编码 -> 推给远端。
+  //
+  // 下面这三条**保留**，理由变了：
+  //   * 在笔记本双显卡 + 外接/虚拟显示器的机器上，明确声明
+  //     「请用高性能 GPU」是正确做法，能避免某些驱动回退到核显；
+  //   * use-angle=d3d11 是 Windows 上最稳的后端；
+  //   * 它们不会让当前环境变差，只是当前环境本来就已经在独显上了。
+  // 换句话说：这三条是**防御性配置**，不是修 bug。
   app.commandLine.appendSwitch("force_high_performance_gpu");
   app.commandLine.appendSwitch("use-angle", "d3d11");
   // 让 GPU 进程有独立的共享内存预算，避免小窗口被当成"不值得分配"

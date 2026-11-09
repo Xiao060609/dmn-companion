@@ -685,6 +685,36 @@
   let petScale = "normal";     // 主进程推过来的当前大小，用来给「大小」打勾
   let qqRunning = false;       // 主进程推过来的 QQ 托管状态（决定「关托管 / 开托管」）
 
+  //: 渲染是否暂停（2026-11-09）。
+  //:
+  //: 真源在主进程 —— 因为暂停可以由托盘菜单触发，那时页面里没有任何点击。
+  //: 这里只是镜像：主进程推 pet:paused 过来，页面跟着停/起 ticker。
+  //:
+  //: 暂停的实现就是 `app.ticker.stop()`：pixi 不再回调，Live2D 的
+  //: model.update（物理/眨眼/呼吸，实测 3.1% 单核）和 renderer.render
+  //: （5.0%）一起停。画布保留最后一帧，所以看起来是「定住了」而不是空白。
+  let petPaused = false;
+
+  function applyPaused(paused) {
+    petPaused = !!paused;
+    try {
+      if (petPaused) {
+        app.ticker.stop();
+      } else {
+        // 恢复时先把 ticker 的上一帧时间重置，避免停了几分钟后第一帧
+        // dt 巨大、Live2D 物理一步跳很远（表现是「猛地抖一下」）。
+        try {
+          app.ticker.lastTime = -1;
+          app.ticker._lastFrame = -1;
+        } catch (_) {}
+        app.ticker.start();
+      }
+    } catch (e) {
+      console.warn("applyPaused failed:", e);
+    }
+  }
+
+
   const MENU = {
     root: {
       title: "菜单",
@@ -692,7 +722,32 @@
         { label: "对话", action: "chat" },
         { label: "大小", sub: "size" },
         { label: "操作", sub: "ops" },
+        // 2026-11-09 主人要求：新增一级「模型」，里面是暂停 / 隐藏。
+        // 这两个都跟"占不占资源"有关，和其他页（对话/大小/操作）分开更清楚。
+        { label: "模型", sub: "model" },
         { label: "后台", action: "admin" },
+      ],
+    },
+    // 模型渲染控制。两项的区别要让人一眼看出：
+    //   暂停 —— 窗口在、人还看得见，只是定住不动（渲染 CPU 归零）
+    //   隐藏 —— 整个窗口消失（从托盘「显示桌宠」叫回来）
+    model: {
+      title: "模型",
+      items: [
+        {
+          label: () => (petPaused ? "继续" : "暂停"),
+          action: "pause",
+          hint: () => (petPaused
+            ? "继续渲染，她会重新呼吸、眨眼"
+            : "暂停渲染：她定住不动，渲染 CPU 归零；窗口还在"),
+          active: () => petPaused,
+        },
+        {
+          label: "隐藏",
+          action: "hide",
+          hint: "整个窗口消失（不是暂停）。从托盘「显示桌宠」叫回来",
+        },
+        { label: "返回", sub: "root" },
       ],
     },
     ops: {
@@ -751,6 +806,14 @@
   }
   if (bridge && typeof bridge.onQqStatus === "function") {
     bridge.onQqStatus((running) => { qqRunning = !!running; });
+  }
+  // 暂停状态：先主动问一次（页面重载时主进程可能已经处于暂停态），
+  // 之后跟着主进程的推送走。
+  if (bridge && typeof bridge.getPaused === "function") {
+    try { applyPaused(!!bridge.getPaused()); } catch (_) {}
+  }
+  if (bridge && typeof bridge.onPaused === "function") {
+    bridge.onPaused((paused) => applyPaused(paused));
   }
 
   function radialRadius() {

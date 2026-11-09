@@ -66,6 +66,16 @@ let dragState = null;
 // T-04：spawn 直接失败（只有 "error" 没有 "exit"）时置位，让 ensureServer 别死等
 let serverSpawnFailed = false;
 
+//: 渲染是否暂停（2026-11-09 主人要求）。
+//:
+//: 为什么状态放在主进程而不是页面里：暂停可以由**托盘菜单**触发，
+//: 那时候页面里没有任何点击、也没有办法自己知道。主进程是唯一真源，
+//: 页面通过 pet:paused 被动跟随，启动时用 pet:get-paused 主动问一次。
+//:
+//: 暂停 = 停 ticker（不渲染），窗口仍在、画面定在最后一帧。
+//: 和「隐藏」不同：隐藏是 win.hide()，整个窗口消失。
+let petPaused = false;
+
 // ---------------------------------------------------------------- 窗口状态
 function loadState() {
   try {
@@ -747,6 +757,16 @@ function buildMenu() {
         if (item.checked) win.showInactive(); else win.hide();
       },
     },
+    // 渲染暂停（2026-11-09）：勾上就停 ticker，她定住不动，渲染 CPU 归零。
+    // 和上面「显示桌宠」并列、互不影响：暂停时窗口还在，只是不动。
+    {
+      label: "暂停渲染",
+      type: "checkbox",
+      checked: petPaused,
+      click: (item) => {
+        setPetPaused(item.checked, "tray");
+      },
+    },
     { label: "重新载入形象", click: () => { if (win) win.loadURL(`${ORIGIN}/pet`).catch(() => {}); } },
     { type: "separator" },
     { label: "退出", click: () => { quitAll().catch(() => {}); } },
@@ -763,10 +783,46 @@ function createTray() {
   tray.on("double-click", openAdmin);
 }
 
-// ---------------------------------------------------------------- IPC
+// ---------------------------------------------------------------- 渲染暂停
+//
+// 2026-11-09 主人要求：「可以暂停模型渲染，让她静止，或者隐藏模型，释放资源」。
+//
+// 动机是实测出来的：桌宠 renderer 常驻 10.3% 单核（其中 Live2D 的
+// model.update 3.1% + renderer.render 5.0%），即使没人看也在跑。
+// 暂停之后这两块归零，窗口留一个定格的画面。
+//
+// ⚠ 暂停 ≠ 隐藏：
+//   暂停 —— 窗口在、人看得见、但不动了（画面定在最后一帧）
+//   隐藏 —— win.hide()，整个窗口消失
+// 两者互不影响：暂停状态下仍然可以隐藏/显示。
+function setPetPaused(paused, reason) {
+  petPaused = !!paused;
+  if (win && !win.isDestroyed()) {
+    win.webContents.send("pet:paused", petPaused);
+  }
+  refreshTrayMenu();
+  logLine(`pet paused=${petPaused}${reason ? " (" + reason + ")" : ""}`);
+  return petPaused;
+}
+
+function togglePetPaused() {
+  return setPetPaused(!petPaused, "menu");
+}
+
 ipcMain.on("pet:ignore-mouse", (_e, flag) => {
   if (!win) return;
   win.setIgnoreMouseEvents(!!flag, { forward: true });
+});
+
+// 页面启动/重载后主动问当前暂停状态。
+// 用 sendSync：页面在初始化那一刻就需要知道，异步会让它先按"在跑"渲染几帧。
+ipcMain.on("pet:get-paused", (e) => {
+  e.returnValue = petPaused;
+});
+
+// 轮盘菜单触发暂停/继续
+ipcMain.on("pet:toggle-pause", () => {
+  togglePetPaused();
 });
 
 ipcMain.on("pet:drag-start", (_e, x, y) => {
@@ -1179,6 +1235,8 @@ ipcMain.on("pet:menu-action", (_e, action, arg) => {
     case "reset-zoom": resetZoom(); break;
     case "corner": moveToCorner(); break;
     case "hide": if (win) win.hide(); break;
+    // 暂停/继续渲染（轮盘「模型」页）。和「隐藏」不同：窗口还在，只是不动。
+    case "pause": setPetPaused(!petPaused, "radial"); break;
     case "restart": restartAll(); break;
     case "qq-toggle": toggleQq(); break;
     case "quit": quitAll().catch(() => {}); break;

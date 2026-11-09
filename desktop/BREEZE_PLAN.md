@@ -1,7 +1,7 @@
 # 小鱼 TTS 引擎更换计划：FastVITS → Breeze-TTS-2.cpp
 
 > 创建：2026-10-31 00:30。目标：把 `<repo>/desktop` 的语音引擎从 FastVITS（DigitalMate 的 exe + Steam 工坊资源）换成
-> `G:\workplase\Breeze-TTS-2.cpp`（本地预编译 Vulkan 二进制 + 3.5GB 模型，Apache 2.0 源码 / 权重 BreezeBlue 研究许可）。
+> `<workspace>/Breeze-TTS-2.cpp`（本地预编译 Vulkan 二进制 + 3.5GB 模型，Apache 2.0 源码 / 权重 BreezeBlue 研究许可）。
 > 本文件是上下文压缩前的恢复锚点：每一步做完打勾，中断后读这里接着干。
 
 ## 0. 验收标准
@@ -24,7 +24,7 @@
 
 ### Breeze 这边（实测结果）
 
-- 位置：`G:\workplase\Breeze-TTS-2.cpp\breeze-tts-2-v0.1.3-windows-x64-vulkan\`
+- 位置：`<workspace>/Breeze-TTS-2.cpp\breeze-tts-2-v0.1.3-windows-x64-vulkan\`
   - `breeze-cli.exe`（59MB）/ `breeze-server.exe`（60MB）/ `libbreeze.dll`（59MB）
   - `models\breeze-tts-2-q8_0.gguf`（3.5GB，已下载完毕）
   - `models\ref_voice.wav`（257KB，BreezeBlue 官方参考音频，**不是早柚的声音**）
@@ -83,7 +83,7 @@ Breeze 是**指令式/克隆式**引擎，没有"speakerID=126 早柚"这种固�
 ### 4.2 `config.py` 新增
 
 ```python
-BREEZE_DIR = Path(CFG.get("breeze_dir", r"G:\workplase\Breeze-TTS-2.cpp\breeze-tts-2-v0.1.3-windows-x64-vulkan"))
+BREEZE_DIR = Path(CFG.get("breeze_dir", r"<workspace>/Breeze-TTS-2.cpp\breeze-tts-2-v0.1.3-windows-x64-vulkan"))
 BREEZE_MODEL = BREEZE_DIR / "models" / CFG.get("breeze_model", "breeze-tts-2-q8_0.gguf")
 BREEZE_SERVER = BREEZE_DIR / "breeze-server.exe"
 BREEZE_VOICES = Path(CFG.get("breeze_voices_dir", "breeze_voices"))  # 相对 BASE

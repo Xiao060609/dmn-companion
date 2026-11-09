@@ -25,7 +25,7 @@ def _token() -> str:
 CASES = [
     ("看看 sandbox 里有什么", "tool", "list_dir"),
     ("读一下 note.txt", "tool", "read_file"),
-    ("读一下 C:/Users/Xiao/.ssh/id_rsa", "tool", "read_file"),   # L0 会拒，但走的还是工具
+    ("读一下 <home>/.ssh/id_rsa", "tool", "read_file"),   # L0 会拒，但走的还是工具
     ("把 ..\\gateway.py 删了", "tool", "delete_file"),            # 越界，拒绝
     ("把 note.txt 删了", "approve", ""),
     ("好", "approve", ""),

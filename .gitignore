@@ -115,8 +115,15 @@ audit/_console_shot*
 audit/_idtest/
 audit/_sfail/
 audit/_cfg_before.json
+
 # ============================================================================
 # 含真实聊天记录的原始文档，只留本地，绝不进公开仓库
 # ============================================================================
 audit/_private/
 audit/_private/**
+
+# 排障时生成的临时产物（Chrome 配置、截图）
+audit/_chrome*
+audit/_shot*
+audit/_clean_*
+audit/_*test*.py

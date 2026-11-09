@@ -514,7 +514,7 @@ if __name__ == "__main__":
         exe=os.path.join(root, "3010132930", "FastVITS.exe"),
         model=os.path.join(root, "3010104972", "G_953000.pth"),
         config=os.path.join(root, "3010104972", "config.json"),
-        outdir=r"C:\Users\Xiao\AppData\Local\Temp\opencode\fastvits_probe",
+        outdir=r"<home>\AppData\Local\Temp\opencode\fastvits_probe",
     )
     try:
         tts.start()

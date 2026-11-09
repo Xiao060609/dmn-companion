@@ -336,7 +336,7 @@ gateway.py（角色层，3175 行）
 | **④ 读上限** | `MAX_READ = 200000` 字节；超了就不读 | hands.py:38、:112-113 | `PolicyDenied("文件太大（N 字节）")` |
 
 **另有第 5 道（后来补的，比四道闸更关键）**：
-- **`realpath` 防 symlink/junction**（hands.py:51-59，:75/:77）：`abspath` 只做字符串规范化，`mklink /J link C:/Users/x/.ssh` 能绕过白名单；`realpath` 会把链接解析成真实目标。
+- **`realpath` 防 symlink/junction**（hands.py:51-59，:75/:77）：`abspath` 只做字符串规范化，`mklink /J link <home>/.ssh` 能绕过白名单；`realpath` 会把链接解析成真实目标。
 - **NTFS ADS（备用数据流）冒号检测**（hands.py:93-97）：`secrets.json:note.txt` 不以 `secrets.json` 结尾、能绕过黑名单，但写的是 `secrets.json` 的备用流。判定在 `realpath` **之后**（realpath 不处理流名）。
 - `delete_file` 额外拒绝目录（:150-151）。
 

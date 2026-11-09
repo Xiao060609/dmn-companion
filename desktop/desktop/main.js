@@ -1199,6 +1199,28 @@ if (!gotLock) {
   app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
   app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 
+  // ---------------------------------------------------------------- GPU
+  //
+  // ⚠ 2026-11-09 实测发现的问题：
+  // 桌宠窗口的 WebGL renderer 是
+  //     ANGLE (Microsoft, Microsoft Basic Render Driver, Direct3D11)
+  // 也就是 **Windows 的软件渲染兜底驱动，不是独显**。
+  // 后果：名为 `gpu-process` 的那个进程其实在用 CPU 做光栅化，
+  // 实测吃掉单核 21%，而同期网关（含向量库）只用了 1 秒。
+  //
+  // 为什么会这样：这台机器有两个显示适配器
+  //     GameViewer Virtual Display Adapter（远程串流用的虚拟显示器）
+  //     NVIDIA GeForce RTX 4060 Laptop GPU
+  // Electron 默认拿到的是虚拟显示器那条路，它没有真 GPU 能力，
+  // 于是 Chromium 回退到 Basic Render Driver。
+  //
+  // 这三条是标准的「请用高性能 GPU」声明，Chromium 会据此挑适配器。
+  // 显式写 d3d11 是因为 ANGLE 在 Windows 上默认就可能选 D3D9/WARP。
+  app.commandLine.appendSwitch("force_high_performance_gpu");
+  app.commandLine.appendSwitch("use-angle", "d3d11");
+  // 让 GPU 进程有独立的共享内存预算，避免小窗口被当成"不值得分配"
+  app.commandLine.appendSwitch("force-gpu-mem-available-mb", "2048");
+
   app.whenReady().then(async () => {
     app.setAppUserModelId("com.xiaohaiyan.pet");
     logLine(`app ready, origin=${ORIGIN}`);

@@ -809,8 +809,8 @@ if __name__ == "__main__":
     import os as _os
     root = _os.path.dirname(_os.path.abspath(__file__))
     # 和 config.json 一致的默认值
-    server = r"G:\workplase\Breeze-TTS-2.cpp\breeze-tts-2-v0.1.3-windows-x64-vulkan\breeze-server.exe"
-    model = r"G:\workplase\Breeze-TTS-2.cpp\breeze-tts-2-v0.1.3-windows-x64-vulkan\models\breeze-tts-2-q8_0.gguf"
+    server = r"<workspace>/Breeze-TTS-2.cpp\breeze-tts-2-v0.1.3-windows-x64-vulkan\breeze-server.exe"
+    model = r"<workspace>/Breeze-TTS-2.cpp\breeze-tts-2-v0.1.3-windows-x64-vulkan\models\breeze-tts-2-q8_0.gguf"
     tts = Breeze(server=server, model=model, outdir=root + r"\tts_cache", port=8849)
     try:
         tts.start()

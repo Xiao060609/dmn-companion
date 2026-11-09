@@ -573,3 +573,42 @@ def test_体检带新颖量():
     assert "daily_review_novel_chars" in st, "体检 stats 缺少 daily_review_novel_chars"
     v = st["daily_review_novel_chars"]
     assert v is None or isinstance(v, (int, float)), f"新颖量应该是数字或 None，实际 {type(v)}"
+
+# --------------------------------------------------------------------------- #
+# 轮询节律（2026-11-09）
+# --------------------------------------------------------------------------- #
+def test_梳理线程轮询是4小时():
+    """`check_s` 必须是 14400（4 小时），别被改回 600。
+
+    为什么改：实测 24 小时里 277 条 `daily_review_skip` 只换来 2 次真梳理
+    （138:1）。而 too_early 这类 skip **不带任何诊断信息** —— 不像
+    consolidate 的 skip 会带 new_turns / idle_hours，能看出"差多少才够"。
+    纯占审计体积和排查时的注意力。
+
+    为什么不是更稀（比如 6 小时）：`earliest_hour=21` + `idle_after_minutes=120`
+    决定只有「深夜且已安静 2 小时」才跑得成。检查太稀会正好撞上主人还在
+    聊天 -> not_idle -> 再等一整轮，整晚都错过。4 小时 = 一天 6 次，够密。
+    """
+    cfg = system._daily_review_cfg()
+    assert cfg["check_s"] == 14400, (
+        f"梳理线程轮询应该是 14400 秒（4 小时），实际 {cfg['check_s']}。"
+        "改回小值会让 skip 审计重新刷屏。"
+    )
+
+
+def test_轮询下限保护不会把4小时压成30秒():
+    """循环里写的是 `max(30.0, check_s)` —— 30 秒只是下限保护。
+
+    这条防的是「有人把下限写成上限」之类的改动，
+    让 4 小时的节律被悄悄压成几十秒。
+    """
+    import inspect
+    import re
+
+    src = inspect.getsource(system._daily_review_loop)
+    m = re.search(r"time\.sleep\(max\(([\d.]+),\s*cfg\[.check_s.\]\)\)", src)
+    assert m, "找不到 loop 里的 sleep 写法，是不是改了结构？"
+    floor = float(m.group(1))
+    assert floor <= 60, (
+        f"下限保护是 {floor} 秒，太大了 —— 它会把 check_s 压到这个值以下"
+    )

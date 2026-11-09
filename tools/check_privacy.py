@@ -79,6 +79,16 @@ CHECKS: list[tuple[str, re.Pattern, str]] = [
         "暴露作者本机目录结构。请用 <repo>/ 或相对路径。"
     ),
     (
+        "本机工作区路径",
+        re.compile(r"[A-Za-z]:[\\/]workplase", re.I),
+        "暴露作者本机的工具目录。请用 <workspace>/ 占位。"
+    ),
+    (
+        "本机用户目录",
+        re.compile(r"[A-Za-z]:[\\/]Users[\\/][^\\/\s`'\"]{2,}", re.I),
+        "暴露 Windows 用户名。请用 <home> 占位。"
+    ),
+    (
         "疑似 API 密钥",
         re.compile(r"sk-[A-Za-z0-9]{20,}"),
         "看起来像真 key。测试用的假 key 请用 sk-test-xxx 这种明显形式。"
@@ -91,7 +101,8 @@ CHECKS: list[tuple[str, re.Pattern, str]] = [
 ]
 
 #: 扫描时要跳过的**本工具自身**：它的规则里必然含这些词。
-SELF_SKIP = {"tools/check_privacy.py"}
+#: `publish.py` 同理 —— 它包含脱敏规则和 .gitignore 模板。
+SELF_SKIP = {"tools/check_privacy.py", "tools/publish.py"}
 
 #: 允许的例外：这些具体字符串是刻意的测试假值
 ALLOW_EXACT = {

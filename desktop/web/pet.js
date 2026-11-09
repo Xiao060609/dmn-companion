@@ -13,6 +13,17 @@
   const bubbleText = document.getElementById("bubble-text");
 
   // ---------------------------------------------------------------- PIXI
+  //
+  // ⚠ 帧率（2026-11-09 按主人要求限到 24）
+  //
+  // 为什么改：实测这个窗口的 `renderer` + `gpu-process` 两个进程
+  // 累计吃了 31 + 26 秒 CPU，而同期网关（含向量库检索）只用了 1 秒 ——
+  // 桌宠渲染的 CPU 开销是重活儿的大头，主人反馈「电脑卡卡的」。
+  //
+  // 24 而不是 30：Live2D 是呼吸、眨眼这种慢动作，24fps 已经足够顺；
+  // 再高只是在空转。要调回去改这一个数就行。
+  const PET_FPS = 24;
+
   const app = new PIXI.Application({
     view: canvas,
     resizeTo: window,
@@ -21,6 +32,18 @@
     autoDensity: true,
     resolution: Math.min(window.devicePixelRatio || 1, 2),
   });
+
+  // pixi v6 的 Ticker 有 maxFPS：设了就按这个上限走，不是每帧都提交。
+  //
+  // ⚠ 只设 maxFPS，**不要碰 minFPS** —— 看过 pixi 6.5.10 的实现：
+  //     maxFPS 的 setter 里是 `Math.max(this.minFPS, t)`
+  //     minFPS 的 setter 里是 `Math.min(this.maxFPS, t)`
+  //   两者互相夹。minFPS 在 pixi 里是「低于这个帧率就当卡了、补时长」的
+  //   降级阈值，不是「不许掉到这么低」。把它也设成 24 会反过来把
+  //   maxFPS 顶住，等于白设。
+  try {
+    app.ticker.maxFPS = PET_FPS;
+  } catch (_) { /* 老版本 pixi 没有这个字段，忽略 */ }
 
   let model = null;
   let coreModel = null;

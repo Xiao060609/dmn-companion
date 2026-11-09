@@ -1116,7 +1116,15 @@ def _daily_review_cfg() -> dict:
         # ④ 投递
         "quiet_hours": cfg.get("quiet_hours") or [],
         # loop 节律
-        "check_s": float(cfg.get("check_s", 600)),
+        #
+        # check_s（2026-11-09 从 600 改成 14400）：
+        # 实测 277 条 `daily_review_skip` 只换来 2 次真梳理（138:1），
+        # 而 too_early 这类 skip **不带任何诊断信息**（不像 consolidate 的
+        # skip 会带 new_turns / idle_hours），纯占审计体积和排查注意力。
+        # 改 4 小时而不是更稀：earliest_hour=21 + idle_after_minutes=120
+        # 决定只有「深夜且已安静 2 小时」才跑得成，检查太稀会正好撞上
+        # 主人在聊天 → not_idle → 再等一整轮，整晚都错过。
+        "check_s": float(cfg.get("check_s", 14400)),
         "boot_delay_s": float(cfg.get("boot_delay_s", 90)),
     }
 
@@ -1393,7 +1401,7 @@ def _daily_review_should_run(now: float | None = None, st: dict | None = None) -
         return False, "below_threshold"
 
     # 本日窗口已经探过一次（模型说跳过）→ 直接睡，别再花第二次调用的钱。
-    # 没有这一道，同一个窗口会每 check_s（10 分钟）探一次。
+    # 没有这一道，同一个窗口会每 check_s 探一次（2026-11-09 起是 4 小时）。
     day = _review_day_key(ts, cfg["day_start_hour"])
     if str(state.get("last_daily_review_probe_day") or "") == day:
         return False, "probed_declined"

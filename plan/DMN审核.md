@@ -1458,7 +1458,7 @@ if _is_memory_task(text):
 
 | 项 | 结果 |
 |---|---|
-| 备份 | `G:\workplase\_xuoyu-db-archive\gateway.db.bak-before-internal-cleanup-20261106-194450` |
+| 备份 | `<workspace>/_xuoyu-db-archive\gateway.db.bak-before-internal-cleanup-20261106-194450` |
 | 删除条数 | **32 条**（30.7 万字符） |
 | turns 变化 | 636 → **604** |
 | 剩余 internal | **0** |

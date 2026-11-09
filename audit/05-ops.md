@@ -718,7 +718,7 @@ scanned=13  keep=13  drop=0  review=0  never_forget=0  no_timestamp=0  boosted=0
   Get-NetTCPConnection -LocalPort 8787  →  127.0.0.1:8787  OwningProcess=10028
   Win32_Process 10028: python.exe -u shim.py --port 8787 --deadline 90 --confirm-timeout 45
                        --approval auto --auto-reload-delay 5
-  shim.py 实际在 E:\workplase\dmagent\shim.py（2026-10-24 10:05）
+  shim.py 实际在 <workspace>/dmagent\shim.py（2026-10-24 10:05）
   ```
   → `<repo>` 内确实没有 shim.py（这部分对），但**8787 端口仍被外部进程（E: 盘的 dmagent）占着**，且它就是地图说的那个"旧方案"。**"已清掉"只对仓库成立，对运行环境不成立。**
 - 影响：`qq\启动-小鱼.ps1:88` 守卫的是 **3100**（旧 qq-bridge），不是 8787 → 这条守卫抓不到 8787 上的旧 shim
@@ -761,7 +761,7 @@ scanned=13  keep=13  drop=0  review=0  never_forget=0  no_timestamp=0  boosted=0
 | **P1-5** | 5 个 tools 脚本在**中文 Windows 默认 GBK 控制台直接跑会崩**（emoji 触发 `UnicodeEncodeError`），必须 `-X utf8` 或 `PYTHONIOENCODING` | 实测 `acceptance_matrix.py` 崩栈；5 个脚本都 print emoji，无一做兜底 |
 | **P1-6** | `documents.metadata` 没有 `kind` 键，文档称"全是 observation" → 数据形状与文档不符 | D-11 |
 | **P1-7** | 地图 `:18` 与 `:369` 引用的 `plan\小鱼-总计划.md` **不存在**（疑似被存成 `plan\.md`） | D-14 |
-| **P1-8** | `8787` 上旧 `shim.py`（E:\workplase\dmagent）仍在监听，地图称"已清掉"；而 `qq\启动-小鱼.ps1:88` 的守卫只查 3100，抓不到它 | D-17 |
+| **P1-8** | `8787` 上旧 `shim.py`（<workspace>/dmagent）仍在监听，地图称"已清掉"；而 `qq\启动-小鱼.ps1:88` 的守卫只查 3100，抓不到它 | D-17 |
 | **P1-9** | `audit/` 无 gitignore 规则 → 下次 commit 会把审计探针脚本带进仓库 | `.gitignore` 无 `audit/`；`git status` 见 `audit/` |
 | **P1-10** | `plan\.md` 是只有扩展名的文件，`git add` 需 `-f`，多数工具会忽略 → 内容（DMN 完成度评估）有丢失风险 | `Test-Path 'plan\.md'` = True |
 
@@ -790,7 +790,7 @@ scanned=13  keep=13  drop=0  review=0  never_forget=0  no_timestamp=0  boosted=0
 |---|---|---|
 | 1 | **`8850` 端口是否真实监听** | 仅 `desktop/BREEZE_PLAN.md:74,142,144` 提到"ws 网关预留"；`tts_breeze.py:17` 只是描述坑的文案；**没有代码读/写 8850**，服务未启动也无法实测 |
 | 2 | **1061 这个基线是否曾经成立** | 只能确认现在 1138；11-06 那次的中间状态不可重现（未 commit） |
-| 3 | **`e2e_smoke.py` 能否在隔离模式下真跑通** | 它要求 `GATEWAY_DATA_DIR` 指向隔离目录，而文档给的示例路径 `E:\workplase\_e2e_data` **不存在**（实测）；且必须起 2 个服务（本轮禁止），故未验证 |
+| 3 | **`e2e_smoke.py` 能否在隔离模式下真跑通** | 它要求 `GATEWAY_DATA_DIR` 指向隔离目录，而文档给的示例路径 `<workspace>/_e2e_data` **不存在**（实测）；且必须起 2 个服务（本轮禁止），故未验证 |
 | 4 | **语音引擎（3.5GB 模型）当前是否占着 8849** | 8849 无监听（实测），但 `breeze-server.exe` 是否以非监听状态残留未查 |
 | 5 | **`完工报告:75`"连跑 3 次全绿"** | 只跑了 1 次全量，未复核 |
 | 6 | **`项目地图.md:1299-1300` 的 30.7s / 48.9s 启动耗时** | 需真启动服务，本轮禁止 |

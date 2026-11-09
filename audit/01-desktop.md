@@ -196,7 +196,7 @@ desktop\                                  ← 主板块（桌宠）
 
 - **F 测试（实测 126 passed / 22.31s）**：10 个文件，覆盖触摸区域存取与命中、TTS 缓存 prune、Breeze spawn 闸门与 adopted、QQ 托管命令文案、系统层代理、唤醒词、以及 conftest 的 autouse 隔离守门（`test_desktop_isolation.py`）。用例名多为中文。
 - **G 探测**：`probe_breeze.py` 是"端到端冒烟"（README:52、项目地图:148 都推荐它）——但它**语法错误，根本不能跑**（见 P2-6）。`probe\` 下 8 个脚本 + 6.8 MB 参考 wav，`.gitignore` 排除了 `probe/cry|voice_candidates|tone|qq_tone`。
-- **H 素材**：10125 文件 / 5.43 GB（实测）；性质＝Steam 创意工坊内容（三个 item id 目录），用途＝Live2D 模型 28.4 MB + FastVITS 引擎 5.07 GB（自带 python310/torch）+ 音色 457 MB；`config.py:10-13` 用**仓库内相对路径**指向它（"不再依赖本机 Steam 库"）。版权：模型是 `Salt - Trial Version`（README:219 已声明试用/不可商用），`.gguf` 在仓库外（`config.json.breeze_dir` 绝对路径 `G:\workplase\...`，实测存在 3.32 GB）。
+- **H 素材**：10125 文件 / 5.43 GB（实测）；性质＝Steam 创意工坊内容（三个 item id 目录），用途＝Live2D 模型 28.4 MB + FastVITS 引擎 5.07 GB（自带 python310/torch）+ 音色 457 MB；`config.py:10-13` 用**仓库内相对路径**指向它（"不再依赖本机 Steam 库"）。版权：模型是 `Salt - Trial Version`（README:219 已声明试用/不可商用），`.gguf` 在仓库外（`config.json.breeze_dir` 绝对路径 `<workspace>/...`，实测存在 3.32 GB）。
 
 ---
 
@@ -458,7 +458,7 @@ $ <venv>\Scripts\python.exe -m pytest tests -q --no-header -p no:cacheprovider
 **P2-7 文档多处与代码不符**（详见 §7）
 
 **P2-8 配置不可移植 + 引擎路径在仓库外**
-- `config.json.breeze_dir` 是绝对路径 `G:\workplase\Breeze-TTS-2.cpp\...`，换机器必挂（`tts_breeze.py:597-610` 已经加了"人话报错"来缓解，但仍是硬编码）；`config.py:21` 里有同一个绝对路径作默认值。
+- `config.json.breeze_dir` 是绝对路径 `<workspace>/Breeze-TTS-2.cpp\...`，换机器必挂（`tts_breeze.py:597-610` 已经加了"人话报错"来缓解，但仍是硬编码）；`config.py:21` 里有同一个绝对路径作默认值。
 
 **P2-9 Electron 窗口未限制导航/新窗口**
 - 证据：`main.js:420-426` 与 `629-635` 只设了 `contextIsolation/nodeIntegration/sandbox`，**没有** `setWindowOpenHandler`、没有 `will-navigate` 拦截；`preload.js` 暴露了 `menuAction("quit"/"restart"/"hide")` 等能力。
@@ -494,7 +494,7 @@ $ <venv>\Scripts\python.exe -m pytest tests -q --no-header -p no:cacheprovider
 ## 8. 未确认 / 需要别人核实的点
 
 1. **网关 `console.js` 直连 8898 的两张卡**：我判"必然 401"是纯【读码】结论（服务未运行，没法实测）。请 gateway 组确认：是否计划放开 `Access-Control-Allow-Headers` 或给 8848 加代理。若他们已改过，我的 P1-5 自动降级。
-2. **`8850` 是否只 bind 在 127.0.0.1**：`breeze-server.log` 只写 `websocket on ws://127.0.0.1:8850`，但引擎源码不在仓库（`G:\workplase\...`），无法确认它是否接受非本机连接。当前服务未运行，`netstat` 也看不到。
+2. **`8850` 是否只 bind 在 127.0.0.1**：`breeze-server.log` 只写 `websocket on ws://127.0.0.1:8850`，但引擎源码不在仓库（`<workspace>/...`），无法确认它是否接受非本机连接。当前服务未运行，`netstat` 也看不到。
 3. **Breeze 引擎 `/health` 是否真的永远不带 `pid`**：`tts_breeze.py:459-469` 说"引擎当前只回 `{"status","ws_port"}`"，`server.log` 里 80 条 adopted 日志全是 `PID=未知`。如果新版本引擎加了 `pid` 字段，`_instance_hint` 会自动用上——需要跑起来才能确认。
 4. **`data/touch_regions.json` 的实际生效区域**：文件里有 7 个区域，但 `legs` 的 shape 是 `y=0.5278,h=0.3263`（0.5278~0.8541），和内置默认 `legs`（0.72~0.92）不同；`feet` 是 0.8703~0.9604。这是**主人手画过的证据**，但我无法确认它和模型当前姿态是否对齐（需要跑起来实测命中）。
 5. **`desktop\workspace\delete_temp.py` 是不是 agent 真跑出来的**：内容会删 `%USERPROFILE%\Desktop\新建 Text Document*`。文件 mtime 2026-10-27，`config.json.agent.cwd="workspace"` 指的就是这个目录，但我没有执行历史可证。若确认是 agent 产物，说明"本机信任"假设已被用过（P1-6 的实证）。

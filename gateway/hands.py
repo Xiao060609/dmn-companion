@@ -53,7 +53,7 @@ def resolve(path: str) -> str:
 
     这里必须用 realpath 而不是 abspath：abspath 只做字符串层面的规范化，
     不解析 symlink / NTFS junction。只要在 sandbox 里放一个指向外部的 junction
-    （`mklink /J link C:/Users/x/.ssh`），abspath 就会认为路径还在 sandbox 内，
+    （`mklink /J link <home>/.ssh`），abspath 就会认为路径还在 sandbox 内，
     白名单形同虚设。realpath 会把链接解析成真实目标，越界就能被下面那道
     「必须落在 ROOTS 里」的检查拦住。
     """

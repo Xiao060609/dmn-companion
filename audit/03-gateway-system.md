@@ -832,7 +832,7 @@ def _write_index(index, path):
 ```
 
 **为什么需要**（模块注释 :13-16）：
-> Faiss C++ `fopen()` 在 Windows 上使用 **ANSI codepage**。Python 传给 Faiss 的路径是 UTF-8 字节，但 Windows fopen 期望 ANSI 编码，导致含非 ASCII 字符的路径（如 `C:\Users\中文用户名\...`）被解读为乱码而失败。
+> Faiss C++ `fopen()` 在 Windows 上使用 **ANSI codepage**。Python 传给 Faiss 的路径是 UTF-8 字节，但 Windows fopen 期望 ANSI 编码，导致含非 ASCII 字符的路径（如 `<home>\...`）被解读为乱码而失败。
 
 **本项目必然踩到**：仓库根目录是 `<repo>/`，`path.isascii()` 是 **False**。
 

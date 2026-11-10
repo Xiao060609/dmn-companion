@@ -309,11 +309,62 @@ def audit_damage_risk() -> list[str]:
     return risks
 
 
+# ============================================================================
+# 2026-11-10 主人下令：**暂停脱敏**。
+#
+# 这个工具走穿 junction，把源项目 19 个真数据文件改坏了：
+#   主人 QQ -> 占位值（她把你当路人）
+#   AstrBot admins_id -> 占位值（你不再是管理员）
+#   144 处表情 ID / 35 处社交记录 / 画像渠道键
+# 全程没有任何报错。
+#
+# 主人原话：「你这个十足的蠢货，暂时不要再做脱敏了，
+#           省的你这个傻子给我乱改。」
+#
+# ⚠ 锁放在 main() 的**最前面、同步之前** ——
+#   因为"同步"本身也会把含真值的源文件复制进纯净版。
+#   如果先同步再拦，纯净版工作区就已经脏了（真值进来了，只是没提交）。
+#   第一次加锁时放在同步后面，实测就是这个后果，只好 git checkout 还原。
+#
+# 要恢复：确认下面三条都满足，再把 _ALLOW_DESENSITIZE 改成 True。
+#   1. audit_damage_risk() 返回空列表
+#   2. desensitize() 的 junction 跳过逻辑有反向测试
+#   3. 手册第四节记着这次事故
+# ============================================================================
+_ALLOW_DESENSITIZE = False
+
+
+def _refuse_desensitize() -> int:
+    """默认拦下整个发布流程。返回退出码 2。"""
+    print()
+    print("=" * 60)
+    print("!! 发布流程已被主人暂停（2026-11-10）")
+    print("=" * 60)
+    print()
+    print("   脱敏工具走穿 junction，把源项目 19 个真数据文件改坏了：")
+    print("     主人 QQ -> 占位值（她把你当路人）")
+    print("     AstrBot admins_id -> 占位值（你不再是管理员）")
+    print("     144 处表情 ID / 35 处社交记录 / 画像渠道键")
+    print("   全程没有任何报错。")
+    print()
+    print("   ⚠ 连「同步」也一起停了：同步会把含真值的源文件")
+    print("     复制进纯净版，虽然不提交，但工作区会脏。")
+    print()
+    print("   要恢复请先看 tools/publish.py 里的 _ALLOW_DESENSITIZE 注释。")
+    print()
+    return 2
+
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="发布到公开仓库")
     ap.add_argument("--commit", action="store_true", help="自动 git add + commit")
     ap.add_argument("--message", "-m", default="", help="提交信息")
     args = ap.parse_args()
+
+    # ---- 主人锁：放在最前面，连同步一起拦（2026-11-10）----
+    if not _ALLOW_DESENSITIZE:
+        return _refuse_desensitize()
 
     print("=" * 60)
     print("1. 同步")

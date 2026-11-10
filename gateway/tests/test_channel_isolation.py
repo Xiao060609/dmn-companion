@@ -184,9 +184,9 @@ def test_认不出来的来源必须走过滤分支():
 @pytest.mark.parametrize(
     "content,expected",
     [
-        ("[群聊·示例群] 主人: 行，抱抱鱼", "qq_group:示例群"),
+        ("【群聊·示例群：10000001】主人（主人）： 行，抱抱鱼", "qq_group:示例群"),
         ("[群聊] 群友: 在吗", "qq_group"),
-        ("[私聊] 示例用户: 偷偷说", "qq_private"),
+        ("【私聊：10000002】示例用户（路人）： 偷偷说", "qq_private"),
         ("主人: 桌宠里说的话", "pet"),
         ("主人：全角冒号也要认", "pet"),
         # 这两类是插件注入的任务说明，内容里带完整对话转写
@@ -227,7 +227,7 @@ def test_回填_主动对话与总结任务必须归类_不能留NULL(db):
 def test_回填_继承要跳过中间的NULL行(db):
     """assistant 回复向前回溯到最近一条非空来源，不是只看紧邻上一条。"""
     _insert(db, [
-        ("user", "[私聊] 示例用户: 有来源的话", "chat", None),
+        ("user", "【私聊：10000002】示例用户（路人）： 有来源的话", "chat", None),
         ("user", "这条推不出来源", "chat", None),
         ("user", "这条也推不出来", "chat", None),
         ("assistant", "隔了两条 NULL 的回复", "chat", None),
@@ -243,7 +243,7 @@ def test_已错标成私聊的总结任务会被纠正成internal(db):
     """v2 曾把 # 任务说明 归成 qq_private；relabel 要把它们改回来且幂等。"""
     _insert(db, [
         ("user", "# 任务说明\n请以第一人称回顾并总结以下对话", "chat", "qq_private"),
-        ("user", "[私聊] 示例用户: 正常私聊", "chat", "qq_private"),
+        ("user", "【私聊：10000002】示例用户（路人）： 正常私聊", "chat", "qq_private"),
     ])
     first = mc.migrate(db)
     assert first["relabeled_internal"] == 1
@@ -264,7 +264,7 @@ def test_回填_回溯继承跟随最近的非空来源(db):
     回复失去归属，权衡后选了简单的一档。
     """
     _insert(db, [
-        ("user", "[群聊·某群] 群友: 群里的话", "chat", None),
+        ("user", "【群聊·某群：10000002】群友（路人）： 群里的话", "chat", None),
         ("assistant", "群里的回复", "chat", None),
         ("user", "推不出来源的一句", "chat", None),
         ("assistant", "隔了一条 NULL 的回复", "chat", None),
@@ -280,7 +280,7 @@ def test_回填_回溯继承跟随最近的非空来源(db):
 
 def test_迁移幂等_连跑三次结果一致(db):
     _insert(db, [
-        ("user", "[私聊] 示例用户: 私聊里的话", "chat", None),
+        ("user", "【私聊：10000002】示例用户（路人）： 私聊里的话", "chat", None),
         ("assistant", "私聊的回复", "chat", None),
         ("user", "[系统任务：主动对话] xxx", "chat", None),
     ])
@@ -309,7 +309,7 @@ def test_迁移能在老库上补列(tmp_path):
     )
     conn.execute(
         "insert into turns(session, role, content, path, ts)"
-        " values('main','user','[私聊] 示例用户: 老数据','chat',1.0)"
+        " values('main','user','【私聊：10000002】示例用户（路人）： 老数据','chat',1.0)"
     )
     conn.commit()
     conn.close()
@@ -319,7 +319,7 @@ def test_迁移能在老库上补列(tmp_path):
     with sqlite3.connect(path) as conn:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(turns)")]
         assert "channel" in cols
-        assert conn.execute("select content from turns").fetchone()[0] == "[私聊] 示例用户: 老数据"
+        assert conn.execute("select content from turns").fetchone()[0] == "【私聊：10000002】示例用户（路人）： 老数据"
         assert conn.execute("select channel from turns").fetchone()[0] == "qq_private"
 
 
@@ -330,9 +330,9 @@ def _seed_mixed(gateway_mod):
     """一条完整的混合来源样本，供下面的隔离用例共用。"""
     _insert(gateway_mod.DB_PATH, [
         ("user", "主人: 桌宠里说的私事", "chat", "pet"),
-        ("user", "[私聊] 示例用户: 私聊里的秘密", "chat", "qq_private"),
-        ("user", "[群聊·A] 群友甲: A群的话", "chat", "qq_group:A"),
-        ("user", "[群聊·B] 群友乙: B群的话", "chat", "qq_group:B"),
+        ("user", "【私聊：10000002】示例用户（路人）： 私聊里的秘密", "chat", "qq_private"),
+        ("user", "【群聊·A：10000002】群友甲（路人）： A群的话", "chat", "qq_group:A"),
+        ("user", "【群聊·B：10000002】群友乙（路人）： B群的话", "chat", "qq_group:B"),
         ("user", "[群聊·A] 工具调用", "tool", "qq_group:A"),
         ("user", "[群聊·A] 审批往返", "approval", "qq_group:A"),
     ])
@@ -424,10 +424,10 @@ def test_群聊上下文不得包含超大私聊转写(gateway_mod):
     _insert(gateway_mod.DB_PATH, [
         ("user", big, "chat", None),                       # 迁移前的老行，channel 为 NULL
         ("user", "[系统任务：主动对话] 你被授权在私聊中发起一次“主动消息”", "chat", None),
-        ("user", "[群聊·示例群] 群友甲: 正常群消息", "chat", "qq_group:示例群"),
+        ("user", "【群聊·示例群：10000002】群友甲（路人）： 正常群消息", "chat", "qq_group:示例群"),
     ])
     got = _contents(gateway_mod, "群聊·示例群")
-    assert got == ["[群聊·示例群] 群友甲: 正常群消息"], got
+    assert got == ["【群聊·示例群：10000002】群友甲（路人）： 正常群消息"], got
     assert not any("# 任务说明" in x for x in got)
     assert not any("[系统任务" in x for x in got)
 
@@ -436,8 +436,8 @@ def test_internal行在任何上下文都不可见(gateway_mod):
     """插件注入的「任务说明」是整段对话转写，不是聊天，连桌宠都不该看到。"""
     _insert(gateway_mod.DB_PATH, [
         ("user", "# 任务说明\n请以第一人称回顾并总结以下对话", "chat", "internal"),
-        ("user", "[私聊] 示例用户: 正常私聊", "chat", "qq_private"),
-        ("user", "[群聊·A] 群友: 正常群聊", "chat", "qq_group:A"),
+        ("user", "【私聊：10000002】示例用户（路人）： 正常私聊", "chat", "qq_private"),
+        ("user", "【群聊·A：10000002】群友（路人）： 正常群聊", "chat", "qq_group:A"),
     ])
     for channel, pet, hide in [
         ("私聊", False, True), ("私聊", False, False),

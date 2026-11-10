@@ -291,8 +291,18 @@
   $("btn-qq-toggle").addEventListener("click", toggleQq);
 
   // ---------------------------------------------------------------- 对话模型
-  // 网关在 8898，页面在 8848，跨端口但同机
-  const GATEWAY = location.protocol + "//" + location.hostname + ":8898";
+  //
+  // ⚠ 2026-11-09：**不再直连网关**。
+  //
+  // 原来这里有个 `const GATEWAY = ...:8898`，前端直接打
+  // `8898/admin/model` 和 `8898/admin/keys`。但那些接口要
+  // `X-Gateway-Token`，而 token 只在服务端读得到 —— 浏览器里拿不到，
+  // 于是**必然 401**：「对话模型」卡片永远显示「网关未连接」、
+  // 下拉框空的、地址空的；「API 密钥」卡片显示「网关没连上，读不到 key 列表」。
+  //
+  // 系统层早就有 `/api/system-model` 代理（8848 -> 网关），角色层这两条一直漏了。
+  // 现在统一走同源代理：`/api/role-model`（配置）+ `/api/keys`（密钥）。
+  // 好处不只是能用了 —— 也不再需要把跨端口的 CORS 开给浏览器。
   const lmMode = $("lm-mode");
   const lmProvider = $("lm-provider");
   const lmBase = $("lm-base");
@@ -301,9 +311,16 @@
 
   function applyModeState() {
     const cloud = lmMode.value === "cloud";
+    // 本地模型没有服务商可选。以前是「禁用但可见」，
+    // 灰掉的下拉框看着还是像能选（2026-11-09 主人指出这点）。
+    // 现在直接隐藏**这个 select 自己** —— 不能隐藏整行，
+    // 因为「本地/云端」那个 select 也在同一行里。
+    lmProvider.classList.toggle("hidden", !cloud);
     lmProvider.disabled = !cloud;
     lmBase.disabled = !cloud;
     lmModel.disabled = !cloud;
+    // 云端时把 select 的语义说清：它选的是「预设」，不是「服务商」
+    lmProvider.title = cloud ? "选一个预设，会自动填服务地址" : "";
   }
 
   function fillProviders(providers) {
@@ -316,9 +333,149 @@
     });
   }
 
+  // ---------------------------------------------------------------- 全局保存
+  //
+  // 2026-11-09 主人要求：模型那两张卡的改动**不点「保存更改」就不生效**。
+  //
+  // 为什么改：以前每张卡各有自己的「保存并试连」，改完点一下立刻写盘。
+  // 问题是改错一个字符、或者只是想看看另一个配置长什么样，一碰就落盘了，
+  // 没有反悔机会。现在改成：
+  //   改任何字段 -> 只标记"脏"，右上角出现「保存更改 1」
+  //   点它     -> 一次性把两张卡都提交，逐项试连，报结果
+  //
+  // 脏标记按**字段快照**比对，不是"听过 input 事件就算脏"——
+  // 改完又改回去，按钮应该自己消失。
+  const SAVE_FIELDS = {
+    lm: ["lm-mode", "lm-provider", "lm-base", "lm-model"],
+    sm: ["sm-provider", "sm-base", "sm-model", "sm-key"],
+  };
+  let baseline = {};      // 载入时的快照
+  let dirtyCount = 0;
+
+  function snapshot() {
+    const snap = {};
+    Object.values(SAVE_FIELDS).flat().forEach((id) => {
+      const el = $(id);
+      snap[id] = el ? String(el.value || "") : "";
+    });
+    return snap;
+  }
+
+  function recountDirty() {
+    const now = snapshot();
+    let n = 0;
+    Object.keys(now).forEach((id) => {
+      // 密码框语义特殊：留空表示"不改动现有 key"，
+      // 所以空值永远不算脏 —— 只有真的填了新 key 才算。
+      if (id === "sm-key") {
+        if (now[id] !== "") n += 1;
+        return;
+      }
+      if (now[id] !== (baseline[id] ?? "")) n += 1;
+    });
+    dirtyCount = n;
+    const btn = $("btn-save-all");
+    const badge = $("save-dirty");
+    if (!btn) return;
+    btn.classList.toggle("hidden", dirtyCount === 0);
+    if (badge) {
+      badge.textContent = String(dirtyCount);
+      badge.classList.toggle("hidden", dirtyCount === 0);
+    }
+  }
+
+  function markBaseline() {
+    baseline = snapshot();
+    recountDirty();
+  }
+
+  async function saveAll() {
+    const btn = $("btn-save-all");
+    if (!btn) return;
+    const label = btn.querySelector("span");
+    const old = label ? label.textContent : "";
+    btn.disabled = true;
+    if (label) label.textContent = "试连中…";
+
+    const results = [];
+    const now = snapshot();
+
+    // ---- 角色层 ----
+    const lmChanged = SAVE_FIELDS.lm.some(
+      (id) => now[id] !== (baseline[id] ?? ""));
+    if (lmChanged) {
+      try {
+        const res = await fetch("/api/role-model", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: now["lm-mode"],
+            provider: now["lm-provider"],
+            base: now["lm-base"].trim(),
+            model: now["lm-model"].trim(),
+            key: "",
+          }),
+        });
+        const d = await res.json();
+        if (!res.ok || !d.ok) throw new Error(d.message || d.error || "失败");
+        results.push("对话模型：" + d.message);
+      } catch (e) {
+        results.push("对话模型失败：" + (e && e.message ? e.message : e));
+      }
+    }
+
+    // ---- 系统层 ----
+    const smChanged = SAVE_FIELDS.sm.some(
+      (id) => now[id] !== (baseline[id] ?? ""));
+    if (smChanged) {
+      try {
+        const res = await fetch("/api/system-model", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: now["sm-provider"],
+            base: now["sm-base"].trim(),
+            model: now["sm-model"].trim(),
+            key: now["sm-key"].trim(),
+          }),
+        });
+        const d = await res.json();
+        if (!res.ok || !d.ok) throw new Error(d.message || d.error || "失败");
+        results.push("系统模型：" + d.message);
+      } catch (e) {
+        results.push("系统模型失败：" + (e && e.message ? e.message : e));
+      }
+    }
+
+    btn.disabled = false;
+    if (label) label.textContent = old;
+    // 密码框用完就清掉，别把明文留在 DOM 里
+    const smKeyEl = $("sm-key");
+    if (smKeyEl) smKeyEl.value = "";
+
+    results.forEach((r) => addMsg("sys", r));
+    if (!results.length) addMsg("sys", "没有改动");
+    // 无论成功失败都重新拉一次：成功要看新值，失败要回到磁盘上的真实状态。
+    // loadModelConfig / loadSystemModel 都会调 markBaseline()，
+    // 所以拉完之后「保存更改」按钮会自动消失。
+    await loadModelConfig();
+    await loadSystemModel();
+    await loadKeys();
+    refreshStatus();
+  }
+
+  // 任何一张卡的字段变了都重算脏标记
+  Object.values(SAVE_FIELDS).flat().forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener("input", recountDirty);
+    el.addEventListener("change", recountDirty);
+  });
+  $("btn-save-all") && $("btn-save-all").addEventListener("click", saveAll);
+
   async function loadModelConfig() {
     try {
-      const res = await fetch(GATEWAY + "/admin/model");
+      const res = await fetch("/api/role-model");
       if (!res.ok) throw new Error("HTTP " + res.status);
       const d = await res.json();
       lmPresets = d.presets || {};
@@ -331,52 +488,24 @@
         (d.mode === "cloud" ? "云端 · " : "本地 · ") + (d.model || "—");
       $("lm-key-state").textContent = d.key_set ? "已配置" : "未配置";
       applyModeState();
+      markBaseline();
     } catch (e) {
       $("lm-current").textContent = "网关未连接";
       $("lm-key-state").textContent = "—";
     }
   }
 
-  async function saveModelConfig() {
-    const btn = $("btn-lm-save");
-    btn.disabled = true;
-    const label = btn.textContent;
-    btn.textContent = "试连中…";
-    const body = {
-      mode: lmMode.value,
-      provider: lmProvider.value,
-      base: lmBase.value.trim(),
-      model: lmModel.value.trim(),
-      // key 由下面的「API 密钥」卡片管，这里不动它
-      key: "",
-    };
-    try {
-      const res = await fetch(GATEWAY + "/admin/model", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const d = await res.json();
-      if (!res.ok || !d.ok) throw new Error(d.message || d.error || "切换失败");
-      addMsg("sys", d.message);
-      await loadModelConfig();
-      await loadKeys();
-      refreshStatus();
-    } catch (e) {
-      addMsg("sys", "切换失败：" + (e && e.message ? e.message : e));
-    } finally {
-      btn.disabled = false;
-      btn.textContent = label;
-    }
-  }
-
-  lmMode.addEventListener("change", applyModeState);
+  lmMode.addEventListener("change", () => {
+    applyModeState();
+    recountDirty();
+  });
+  // 选「预设」自动填服务地址（2026-11-09）
+  // 以前虽然有这个逻辑，但只在角色层云端模式下生效，而且系统层完全没有。
   lmProvider.addEventListener("change", () => {
-    if (lmMode.value !== "cloud") return;
     const preset = lmPresets[lmProvider.value];
     if (preset) lmBase.value = preset;
+    recountDirty();
   });
-  $("btn-lm-save").addEventListener("click", saveModelConfig);
 
   // ---------------------------------------------------------------- 系统模型
   // 系统层（心跳/巩固/复盘/体检）用哪个模型。和上面「对话模型」是两张独立的卡：
@@ -415,49 +544,25 @@
       $("sm-key-state").textContent = d.key_set
         ? (d.key_masked ? "已配置 " + d.key_masked : "已配置")
         : "未配置";
+      // 载入即基线：这时不该有任何"脏"字段
+      markBaseline();
     } catch (e) {
       $("sm-current").textContent = "网关未连接";
       $("sm-key-state").textContent = "—";
     }
   }
 
-  async function saveSystemModel() {
-    const btn = $("btn-sm-save");
-    btn.disabled = true;
-    const label = btn.textContent;
-    btn.textContent = "试连中…";
-    const body = {
-      provider: smProvider.value,
-      base: smBase.value.trim(),
-      model: smModel.value.trim(),
-      // 留空 = 不改现有 key（前端不重复传明文）
-      key: $("sm-key").value.trim(),
-    };
-    try {
-      const res = await fetch("/api/system-model", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const d = await res.json();
-      if (!res.ok || !d.ok) throw new Error(d.message || d.error || "切换失败");
-      addMsg("sys", d.message);
-      $("sm-key").value = "";   // 成功了就把明文清掉，别留在 DOM 里
-      await loadSystemModel();
-      refreshStatus();
-    } catch (e) {
-      addMsg("sys", "系统模型切换失败：" + (e && e.message ? e.message : e));
-    } finally {
-      btn.disabled = false;
-      btn.textContent = label;
-    }
-  }
+  // 系统模型的保存已经合并到顶栏「保存更改」里（见 saveAll）。
+  // 原来这里有个独立的 saveSystemModel + 「保存并试连」按钮，
+  // 2026-11-09 按主人要求统一收口 —— 两张卡共用一个保存按钮，
+  // 避免"改了一半才发现点错了卡"。
 
+  // 选「预设」自动填服务地址（系统层也要，之前只有角色层有）
   smProvider.addEventListener("change", () => {
     const preset = smPresets[smProvider.value];
     if (preset) smBase.value = preset;
+    recountDirty();
   });
-  $("btn-sm-save").addEventListener("click", saveSystemModel);
   loadSystemModel();
 
   // ---------------------------------------------------------------- 每日梳理期
@@ -726,7 +831,7 @@
 
   async function loadKeys() {
     try {
-      const res = await fetch(GATEWAY + "/admin/keys");
+      const res = await fetch("/api/keys");
       if (!res.ok) throw new Error("HTTP " + res.status);
       renderKeys(await res.json());
     } catch (e) {
@@ -750,7 +855,7 @@
       btn.textContent = "添加中…";
     }
     try {
-      const res = await fetch(GATEWAY + "/admin/keys", {
+      const res = await fetch("/api/keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(Object.assign({ action, id }, extra || {})),
@@ -790,7 +895,7 @@
     const label = k.label || "未命名";
     addMsg("sys", `正在测试「${label}」…（用的是当前模型和服务商）`);
     try {
-      const res = await fetch(GATEWAY + "/admin/keys", {
+      const res = await fetch("/api/keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "test", id: k.id }),
@@ -826,7 +931,7 @@
     result.textContent = "正在试连…（用的是当前模型和服务商）";
     $("key-probe-actions").classList.add("hidden");
     try {
-      const res = await fetch(GATEWAY + "/admin/keys", {
+      const res = await fetch("/api/keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "probe", key }),

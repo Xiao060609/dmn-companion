@@ -89,14 +89,14 @@ def test_只抽能判定主体的渠道且事件渠道各自正确(env, monkeypa
     # 桌宠：主人直接说
     _add(db, "pet", "user", "主人: 今天有点累")
     _add(db, "pet", "assistant", "那早点睡。")
-    # 主人私聊：带 `[私聊] 主人:` 前缀
-    _add(db, "qq_private", "user", "[私聊] 主人: 我在忙流程优化")
+    # 主人私聊：带 `【私聊：10000001】示例用户（主人）：` 前缀
+    _add(db, "qq_private", "user", "【私聊：10000001】示例用户（主人）： 我在忙流程优化")
     _add(db, "qq_private", "assistant", "好，你先忙。")
     # 陌生人私聊 / 插件注入：判不出主体，绝不抽
-    _add(db, "qq_private", "user", "[私聊] 张三: 在吗在吗")
+    _add(db, "qq_private", "user", "【私聊：10000002】张三（路人）： 在吗在吗")
     _add(db, "qq_private", "user", "[系统任务：主动对话]\n你被授权发起一次主动消息")
     # 群聊：标签带群名
-    _add(db, GROUP, "user", "[群聊·示例群] 黑崎小雪: 今天好冷")
+    _add(db, GROUP, "user", "【群聊·示例群：10000002】黑崎小雪（路人）： 今天好冷")
     _add(db, GROUP, "assistant", "那你多穿点。")
     # 取不到来源标签 / 没群名的群：不抽
     _add(db, "qq_unknown", "user", "[系统任务：主动对话] 说点什么")
@@ -124,7 +124,9 @@ def test_只抽能判定主体的渠道且事件渠道各自正确(env, monkeypa
     assert "系统任务" not in joined
     assert "[群聊] 没群名" not in joined
     # 主人私聊那批里，主人的话和她的回复都在
-    private_batch = [b for b in seen if any("[私聊]" in str(t["content"]) for t in b)][0]
+    # （标头 2026-11-08 起是 `【私聊：QQ号】昵称（主人）：`，不再是 `[私聊]`）
+    private_batch = [b for b in seen
+                     if any("【私聊：" in str(t["content"]) for t in b)][0]
     assert len(private_batch) == 2
     assert "流程优化" in str(private_batch[0]["content"])
 
@@ -132,7 +134,7 @@ def test_只抽能判定主体的渠道且事件渠道各自正确(env, monkeypa
 def test_群聊事件渠道保留完整群名不截断(env, monkeypatch):
     """群聊抽出来的事件被标成 pet 或截断成 qq_group，隔离就失效了。"""
     db = env
-    _add(db, GROUP, "user", "[群聊·示例群] 龙: 我只是路过")
+    _add(db, GROUP, "user", "【群聊·示例群：10000002】龙（路人）： 我只是路过")
     monkeypatch.setitem(system.SYSTEM, "consolidate_min_new_turns", 1)
     monkeypatch.setattr(
         system, "_extract_events",
@@ -208,7 +210,7 @@ def test_一个渠道处理完不影响另一个渠道的增量(env, monkeypatch
     for i in range(10):
         _add(db, "pet", "user", f"主人: 第{i}句")
     for i in range(10):
-        _add(db, GROUP, "user", f"[群聊·示例群] 龙: 群第{i}句")
+        _add(db, GROUP, "user", f"【群聊·示例群：10000002】龙（路人）： 群第{i}句")
 
     monkeypatch.setitem(system.SYSTEM, "consolidate_min_new_turns", 1)
     monkeypatch.setattr(system, "_extract_events", lambda turns: [])

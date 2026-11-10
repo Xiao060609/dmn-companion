@@ -96,7 +96,7 @@ def test_陌生人私聊不建模也不注入(monkeypatch):
         system, "call_system", lambda msgs, **kw: called.append(msgs) or (None, {}, None)
     )
     ok = system.update_people_profile(
-        "qq_private", [{"role": "user", "content": "[私聊] 张三: 在吗", "ts": 0}]
+        "qq_private", [{"role": "user", "content": "【私聊：10000002】张三（路人）： 在吗", "ts": 0}]
     )
     assert ok is False, "qq_private 分不清主人/陌生人，必须拒绝建模"
     assert called == [], "拒绝建模时不该浪费一次模型调用"
@@ -114,9 +114,9 @@ def test_混合私聊只拿主人那几句去建模(monkeypatch):
 
     monkeypatch.setattr(system, "call_system", fake)
     mixed = [
-        {"id": 1, "role": "user", "content": "[私聊] 主人: 今天好累", "ts": 0},
+        {"id": 1, "role": "user", "content": "【私聊：10000001】示例用户（主人）： 今天好累", "ts": 0},
         {"id": 2, "role": "assistant", "content": "那早点睡", "ts": 0},
-        {"id": 3, "role": "user", "content": "[私聊] 张三: 在吗在吗", "ts": 0},
+        {"id": 3, "role": "user", "content": "【私聊：10000002】张三（路人）： 在吗在吗", "ts": 0},
     ]
     routed = system._filter_owner_turns(mixed)
     assert system.update_people_profile("pet", routed) is True
@@ -189,7 +189,7 @@ def test_新群不改配置也会建模并进prompt(monkeypatch):
     _add_turns(
         GROUP_A,
         [
-            ("user", "[群聊·王家] 老王: 我家猫又拆家了"),
+            ("user", "【群聊·王家：10000002】老王（路人）： 我家猫又拆家了"),
             ("assistant", "那你收拾起来挺麻烦吧。"),
         ] * 5,
     )

@@ -58,7 +58,7 @@ def _add(gateway, content: str, channel: str, role: str = "user", path: str = "c
 def test_私聊增量能被读到(tmp_path, monkeypatch):
     """这就是生产里丢的那条线：pet 没新对话，但私聊一直在聊。"""
     gateway = _mkdb(tmp_path, monkeypatch)
-    tid = _add(gateway, "[私聊] 主人: 今天好累", "qq_private")
+    tid = _add(gateway, "【私聊：10000001】示例用户（主人）： 今天好累", "qq_private")
     got = system._read_persona_review_turns(0, 200)
     assert [t["id"] for t in got] == [tid]
 
@@ -66,15 +66,15 @@ def test_私聊增量能被读到(tmp_path, monkeypatch):
 def test_pet和私聊一起读且按id排序(tmp_path, monkeypatch):
     gateway = _mkdb(tmp_path, monkeypatch)
     a = _add(gateway, "主人: 桌宠这边", "pet")
-    b = _add(gateway, "[私聊] 主人: 私聊这边", "qq_private")
+    b = _add(gateway, "【私聊：10000001】示例用户（主人）： 私聊这边", "qq_private")
     got = system._read_persona_review_turns(0, 200)
     assert [t["id"] for t in got] == sorted([a, b])
 
 
 def test_水位之后的才算增量(tmp_path, monkeypatch):
     gateway = _mkdb(tmp_path, monkeypatch)
-    a = _add(gateway, "[私聊] 主人: 旧的", "qq_private")
-    b = _add(gateway, "[私聊] 主人: 新的", "qq_private")
+    a = _add(gateway, "【私聊：10000001】示例用户（主人）： 旧的", "qq_private")
+    b = _add(gateway, "【私聊：10000001】示例用户（主人）： 新的", "qq_private")
     got = system._read_persona_review_turns(a, 200)
     assert [t["id"] for t in got] == [b]
 
@@ -82,14 +82,14 @@ def test_水位之后的才算增量(tmp_path, monkeypatch):
 def test_群聊不参与人格复盘(tmp_path, monkeypatch):
     """群里主要是别人说话，拿它塑造人格会让她越来越像群友。"""
     gateway = _mkdb(tmp_path, monkeypatch)
-    _add(gateway, "[群聊·示例群] 路人: 哈哈哈哈", "qq_group:示例群")
+    _add(gateway, "【群聊·示例群：10000002】路人（路人）： 哈哈哈哈", "qq_group:示例群")
     assert system._read_persona_review_turns(0, 200) == []
 
 
 def test_陌生人私聊不参与人格复盘(tmp_path, monkeypatch):
     """qq_private 里混着陌生人，必须过 _filter_owner_turns 只留主人的。"""
     gateway = _mkdb(tmp_path, monkeypatch)
-    _add(gateway, "[私聊] 陌生人: 你是谁呀", "qq_private")
+    _add(gateway, "【私聊：10000002】陌生人（路人）： 你是谁呀", "qq_private")
     got = system._read_persona_review_turns(0, 200)
     assert got == []
 
@@ -107,7 +107,7 @@ def test_internal和工具往返不参与(tmp_path, monkeypatch):
 def test_limit是硬上限(tmp_path, monkeypatch):
     gateway = _mkdb(tmp_path, monkeypatch)
     for i in range(10):
-        _add(gateway, f"[私聊] 主人: 第{i}句", "qq_private")
+        _add(gateway, f"【私聊：10000001】示例用户（主人）： 第{i}句", "qq_private")
     assert len(system._read_persona_review_turns(0, 4)) == 4
 
 
@@ -118,7 +118,7 @@ def test_复盘不再因为pet没货而空转(tmp_path, monkeypatch):
     """生产复现：pet 没增量、私聊有增量时，旧代码会记 no_new_turns。"""
     gateway = _mkdb(tmp_path, monkeypatch)
     for i in range(9):
-        _add(gateway, f"[私聊] 主人: 第{i}句话", "qq_private")
+        _add(gateway, f"【私聊：10000001】示例用户（主人）： 第{i}句话", "qq_private")
 
     calls = {"n": 0}
 
@@ -141,8 +141,8 @@ def test_复盘不再因为pet没货而空转(tmp_path, monkeypatch):
 def test_复盘仍然受最小条数限制(tmp_path, monkeypatch):
     """只有 2 条对话时不该去调模型（宁缺毋滥）。"""
     gateway = _mkdb(tmp_path, monkeypatch)
-    _add(gateway, "[私聊] 主人: 一句", "qq_private")
-    _add(gateway, "[私聊] 主人: 两句", "qq_private")
+    _add(gateway, "【私聊：10000001】示例用户（主人）： 一句", "qq_private")
+    _add(gateway, "【私聊：10000001】示例用户（主人）： 两句", "qq_private")
 
     calls = {"n": 0}
 

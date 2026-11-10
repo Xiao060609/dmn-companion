@@ -194,3 +194,84 @@ def test_合并不跨会话(store, monkeypatch):
     # 同会话过滤发生在调用模型之前，所以这条不该触发合并判断
     assert called["n"] == 0, "不该拿别的会话的旧认知去合并"
     assert len(_texts(store)) == 2, "群聊那条保持不动，owner 那条正常新增"
+
+def related_fixture():
+    """喂给 _parse_merge_reply 的旧记录（编号映射用）。"""
+    return [
+        {"doc_id": "A", "text": "旧的一条"},
+        {"doc_id": "B", "text": "旧的两条"},
+    ]
+
+
+
+# --------------------------------------------------------------------------- #
+# 内容质量守卫（2026-11-09）
+# --------------------------------------------------------------------------- #
+def test_空json不会被当成记忆():
+    """`{}` 曾经被当成「合并后的最终文本」写进生产库。
+
+    实测生产库里有一批 `text='{}'` 的记忆，metadata 里的 content
+    却是真实对话（「今天特别累，不想说话」）—— 记住了但说不出来：
+    向量抓不到、关键词也命中不了，等于白占位置。
+
+    根因：原来只有 `len(final_text) < 2` 一道守卫，而 `{}` 正好 2 个字符。
+    """
+    assert memory_bridge._parse_merge_reply("{}", related_fixture()) is None
+    assert memory_bridge._parse_merge_reply("[]", related_fixture()) is None
+    assert memory_bridge._parse_merge_reply("null", related_fixture()) is None
+    assert memory_bridge._parse_merge_reply("none", related_fixture()) is None
+    assert memory_bridge._parse_merge_reply("--", related_fixture()) is None
+
+
+def test_有壳没肉的json也拒():
+    """`{"content": ""}` 这种有 key 没值的，人读它就是"没内容"。"""
+    assert memory_bridge._parse_merge_reply('{"content": ""}', related_fixture()) is None
+    assert memory_bridge._parse_merge_reply('{"a": [], "b": null}', related_fixture()) is None
+
+
+def test_有值的json放行():
+    """判断原则是"宁可重复不可误删"，拿不准就放行。"""
+    got = memory_bridge._parse_merge_reply('{"content": "他说他要来"}', related_fixture())
+    assert got is not None
+    assert "他说他要来" in got[0]
+
+
+def test_正常短事实不会被误杀():
+    """守卫不能矫枉过正 —— 中文里 2~4 字的事实是合法的。
+
+    「他不去」「他走了」「没人来」都是完整陈述。
+    """
+    for text in ("他不去", "他走了", "没人来", "他今天很累"):
+        got = memory_bridge._parse_merge_reply(text, related_fixture())
+        assert got is not None, "「%s」被误判成噪音了" % text
+        assert got[0] == text
+
+
+def test_叠词不会被误判成噪音():
+    """「嗯嗯」「哈哈」是正常回复，不是格式噪音。
+
+    ⚠ 早期版本的判定是 `len(set(t)) == 1`，把"嗯嗯"也拦了 ——
+    那条规则只该拦纯符号的重复（"----" "。。。。"）。
+    """
+    for text in ("嗯嗯", "哈哈", "aaaa"):
+        got = memory_bridge._parse_merge_reply(text, related_fixture())
+        assert got is not None, "「%s」被误判成噪音了" % text
+
+
+def test_纯符号重复仍然拒():
+    assert memory_bridge._parse_merge_reply("----", related_fixture()) is None
+    assert memory_bridge._parse_merge_reply("。。。。", related_fixture()) is None
+    assert memory_bridge._parse_merge_reply("...", related_fixture()) is None
+
+
+def test_has_real_content纯函数边界():
+    """直接把守卫本身钉住，不看 parse 的整体行为。"""
+    h = memory_bridge.has_real_content
+    # 噪音
+    for bad in ("", " ", "。", "{}", "[]", "null", "none", "--",
+                "无内容", "嗯"):
+        assert not h(bad), "%r 应该判为没有内容" % bad
+    # 真内容
+    for good in ("他不去", "嗯嗯", "哈哈", "他今天很累", "a1",
+                 '{"content": "他说他要来"}'):
+        assert h(good), "%r 应该判为有内容" % good

@@ -114,7 +114,7 @@ def add_pet_turns(n: int = 10, prefix: str = "今天特别累") -> None:
 
 def add_group_turns(channel: str, name: str, n: int = 10, prefix: str = "说话") -> None:
     for i in range(n // 2):
-        add_turn(channel, "user", f"[群聊·{name}] 某人: {prefix}{i}")
+        add_turn(channel, "user", f"【群聊·{name}：10000002】某人（路人）： {prefix}{i}")
         add_turn(channel, "assistant", f"嗯嗯{i}")
 
 
@@ -456,7 +456,7 @@ class TestStage5People:
         assert system._people_key(PET) == "owner"
 
         for i in range(5):
-            add_turn(PRIVATE, "user", f"[私聊] 主人: 我在加班（{i}）")
+            add_turn(PRIVATE, "user", f"【私聊：10000001】示例用户（主人）： 我在加班（{i}）")
             add_turn(PRIVATE, "assistant", f"辛苦啦（{i}）")
         env.profile = {"称呼": "主人", "作息": "常熬夜"}
         env.insights = [{"text": "主人最近在加班", "emotion": "calm", "confidence": 0.6}]
@@ -563,7 +563,7 @@ class TestChannelIsolation:
 
     def test_陌生人私聊与插件注入一条都不进抽取(self, env):
         # 陌生人私聊 + 插件注入 + 助手自言自语
-        add_turn(PRIVATE, "user", "[私聊] 张三: 你好呀")
+        add_turn(PRIVATE, "user", "【私聊：10000002】张三（路人）： 你好呀")
         add_turn(PRIVATE, "assistant", "你好")
         add_turn(PRIVATE, "user", "[系统任务：主动对话] 说点什么")
         raw = system._read_channel_turns(PRIVATE, 0, 200)

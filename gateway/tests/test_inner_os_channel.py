@@ -96,7 +96,7 @@ def _tool(name: str, args: dict) -> list[dict]:
 def _group_rows(n: int = 10) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
     for i in range(n):
-        rows.append(("user", f"[群聊·示例群] 黑崎小雪: 群里第{i}句"))
+        rows.append(("user", f"【群聊·示例群：10000002】黑崎小雪（路人）： 群里第{i}句"))
         rows.append(("assistant", "嗯。"))
     return rows
 

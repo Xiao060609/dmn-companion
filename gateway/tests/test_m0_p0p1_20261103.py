@@ -38,10 +38,10 @@ DIM = 1024
 def _add_turns(channel: str, n: int) -> None:
     """插入 n 条**能被认成主人**的对话。
 
-    ⚠ 私聊必须带 `[私聊] 主人:` 前缀 —— `_read_recent_chat_multi` 靠它认人，
+    ⚠ 私聊必须带 `【私聊：10000001】示例用户（主人）：` 前缀 —— `_read_recent_chat_multi` 靠它认人，
     不带前缀的行会被当成陌生人过滤掉（第一版测试就是这么红的）。
     """
-    prefix = "[私聊] 主人: " if channel == "qq_private" else "主人: "
+    prefix = "【私聊：10000001】示例用户（主人）： " if channel == "qq_private" else "主人: "
     with sqlite3.connect(system_gateway().DB_PATH) as c:
         for i in range(n):
             c.execute(
@@ -146,11 +146,11 @@ def test_recent_chat不读群聊(gw):
 
 
 def test_recent_chat过滤陌生私聊(gw):
-    """私聊里混着陌生人，只有 `[私聊] 主人:` 才算。"""
+    """私聊里混着陌生人，只有 `【私聊：10000001】示例用户（主人）：` 才算。"""
     with sqlite3.connect(gw.DB_PATH) as c:
         c.execute(
             "insert into turns(session,role,content,path,ts,channel)"
-            " values('main','user','[私聊] 陌生人: 你是谁呀','chat',?,'qq_private')",
+            " values('main','user','【私聊：10000002】陌生人（路人）： 你是谁呀','chat',?,'qq_private')",
             (time.time(),),
         )
         c.commit()
@@ -400,3 +400,68 @@ def test_拿不到时间就不删(mem):
         c.commit()
     stats = mem.prune(older_than_days=90, min_importance=0.3)
     assert stats["matched"] == 0
+
+# --------------------------------------------------------------------------- #
+# 系统层素材必须是双向的（2026-11-09）
+# --------------------------------------------------------------------------- #
+def test_她的回复要跟着主人的话一起读到(gw):
+    """只读到主人说的话、读不到她接的话 —— 系统层就会把主语搞反。
+
+    实测事故：内心OS 写成「**他**坚持要正经夸奖」，
+    而要夸奖的其实是小鱼。
+
+    ⚠ 这里不能用 `_add_turns`（它只插 user 行）。要自己插一对
+    「主人说 + 她回」，才能测出回复有没有跟着进来。
+    """
+    import sqlite3
+
+    owner_tag = "【私聊：10000001】示例用户（主人）： "
+    with sqlite3.connect(gw.DB_PATH) as conn:
+        conn.execute(
+            "insert into turns(session, role, content, path, ts, channel)"
+            " values(?,?,?,?,?,?)",
+            (gw.SHARED_SESSION, "user", owner_tag + "那主人夸夸我嘛",
+             "chat", 100.0, "qq_private"),
+        )
+        conn.execute(
+            "insert into turns(session, role, content, path, ts, channel)"
+            " values(?,?,?,?,?,?)",
+            (gw.SHARED_SESSION, "assistant", "我这么乖，什么都记得住",
+             "chat", 101.0, "qq_private"),
+        )
+        conn.commit()
+
+    turns = system._read_recent_chat_multi(20)
+    mine = [t for t in turns if t.get("role") == "assistant"]
+    theirs = [t for t in turns if t.get("role") != "assistant"]
+
+    assert theirs, "主人的话应该读到"
+    assert mine, "**她的回复也必须读到**，否则模型只看到单方面的对话"
+    assert any("夸夸我" in str(t.get("content") or "") for t in theirs)
+    assert any("记得住" in str(t.get("content") or "") for t in mine)
+
+
+def test_陌生人的回复不会混进来(gw):
+    """fail-closed：路人说的和她的回复都不能算"主人刚说过什么"。"""
+    import sqlite3
+
+    other_tag = "【私聊：10000002】张三（路人）：在吗在吗"
+    with sqlite3.connect(gw.DB_PATH) as conn:
+        conn.execute(
+            "insert into turns(session, role, content, path, ts, channel)"
+            " values(?,?,?,?,?,?)",
+            (gw.SHARED_SESSION, "user", other_tag, "chat", 9999999999.0,
+             "qq_private"),
+        )
+        conn.execute(
+            "insert into turns(session, role, content, path, ts, channel)"
+            " values(?,?,?,?,?,?)",
+            (gw.SHARED_SESSION, "assistant", "你是谁呀", "chat", 9999999999.1,
+             "qq_private"),
+        )
+        conn.commit()
+
+    turns = system._read_recent_chat_multi(20)
+    joined = "\n".join(str(t.get("content") or "") for t in turns)
+    assert "张三" not in joined, "路人的话不能进主人素材"
+    assert "你是谁呀" not in joined, "路人之后的回复也不能跟进来"

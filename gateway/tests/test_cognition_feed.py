@@ -180,7 +180,7 @@ def test_群渠道不喂主人私聊的认知():
     store = system._memory_bridge().store()
     _seed(store, ["主人讨厌人群和应酬；讨厌人群；应酬"])
     st = system.load_state()
-    turns = [{"role": "user", "content": "[群聊·某群] 群友: 在吗", "ts": 0}]
+    turns = [{"role": "user", "content": "【群聊·某群：10000002】群友（路人）： 在吗", "ts": 0}]
     msgs = system._build_consolidate_messages(
         st, turns, channel="qq_group:某群")
     payload = json.loads(msgs[-1]["content"])

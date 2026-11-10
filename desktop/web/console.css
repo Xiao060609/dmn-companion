@@ -549,3 +549,33 @@ a:hover { text-decoration: underline; }
   word-break: break-word;
 }
 .inner-card .inner-ts { color: #7d8ba3; font-size: 11px; }
+/* 顶栏「保存更改」（2026-11-09）：**
+   它是全局保存，比普通按钮更该被看见。默认 button 就是主色，
+   这里只补：右上角那个未保存计数的小圆标。 */
+button.primary {
+  position: relative;
+  height: 34px;
+  padding: 0 16px;
+  font-size: 13px;
+  border-radius: 9px;
+  animation: save-pulse 1.6s ease-in-out infinite;
+}
+button.primary b {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--warn);
+  color: #1a1200;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+}
+@keyframes save-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(75, 141, 255, 0.55); }
+  50%      { box-shadow: 0 0 0 5px rgba(75, 141, 255, 0); }
+}

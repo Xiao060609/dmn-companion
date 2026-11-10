@@ -1550,6 +1550,30 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(code, body)
             return
 
+        if path == "/api/role-model":
+            # 角色层用哪个模型（后台「对话模型」卡片）。
+            #
+            # ⚠ 2026-11-09 补：前端原来**直连** `http://127.0.0.1:8898/admin/model`，
+            # 而那个接口要 `X-Gateway-Token`，浏览器里拿不到 —— 于是永远 401，
+            # 卡片显示「网关未连接」，下拉框是空的、地址也是空的。
+            # 系统层早就有 `/api/system-model` 代理，角色层这张卡一直漏了。
+            if not self._client_is_local():
+                self._send_json(403, {"error": "只允许本机调用"})
+                return
+            code, body = gateway_request("/admin/model")
+            self._send_json(code, body)
+            return
+
+        if path == "/api/keys":
+            # API 密钥列表（后台「API 密钥」卡片）。返回的是打码后的样子，
+            # 但仍然是敏感信息，只允许本机。
+            if not self._client_is_local():
+                self._send_json(403, {"error": "只允许本机调用"})
+                return
+            code, body = gateway_request("/admin/keys")
+            self._send_json(code, body)
+            return
+
         if path == "/api/system":
             # 系统层（DMN）状态：后台「她现在的状态」「内心OS」两张卡
             if not self._client_is_local():
@@ -1908,6 +1932,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             payload = self._read_json()
             code, body = gateway_request("/admin/system-model", method="POST", payload=payload)
+            self._send_json(code, body)
+            return
+
+        if path == "/api/role-model":
+            # 保存角色层模型配置。和上面系统层那条对称。
+            if not self._client_is_local():
+                self._send_json(403, {"ok": False, "error": "只允许本机调用"})
+                return
+            payload = self._read_json()
+            code, body = gateway_request("/admin/model", method="POST", payload=payload)
             self._send_json(code, body)
             return
 

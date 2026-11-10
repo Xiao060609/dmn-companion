@@ -97,6 +97,99 @@ _MERGE_PROMPT = """你是记忆整理模块。现在有一条**新事实**要存
 只输出这两行。
 """
 
+#: 假装是内容的常见噪音（整串匹配，不分大小写）。
+#:
+#: 2026-11-09 加：实测生产库里出现过 `text='{}'` 的记忆 ——
+#: metadata 里 content 是「今天特别累，不想说话」（真实对话），
+#: 但渲染出来的 text 是 `{}`。根因就在这里：
+#: `_parse_merge_reply` 的长度守卫只判 `len < 2`，
+#: 而 `{}` `[]` `null` 这些正好 2~4 个字符，**全部通过**，
+#: 于是模型吐的 JSON 噪音被当成「合并后的最终文本」写进了库。
+#:
+#: 后果不是丢数据，是**更隐蔽的"记住了但说不出来"**：
+#: 库里有这条记录，但它的文本没有任何语义，向量检索抓不到、
+#: 关键词检索也命中不了，等于白占一个位置。
+_MERGE_NOISE_TOKENS = frozenset({
+    "{}", "[]", "null", "none", "true", "false", "n/a", "na",
+    "undefined", "nil", "empty",
+    "无内容", "没有内容", "无", "空",
+})
+
+
+def _json_has_no_value(text: str) -> bool:
+    """`{"key": ""}` / `{"key": []}` / `{"key": null}` 这种"有壳没肉"的 JSON。
+
+    不复用 `json` 模块是刻意的：模型输出经常不是合法 JSON
+    （少引号、多逗号、带 markdown 围栏），`json.loads` 会抛异常，
+    这里只要判断「去掉结构字符和 key 之后，还有没有剩下值」。
+
+    Args:
+        text: 待判定的文本。
+
+    Returns:
+        True 表示是个看起来像 JSON、但里面没有实际值的壳。
+    """
+    t = (text or "").strip()
+    if not (t.startswith("{") and t.endswith("}")):
+        return False
+    inner = t[1:-1].strip()
+    if not inner:
+        return True                       # "{}"
+    vals = re.findall(r":\s*(.+?)(?:,|$)", inner)
+    if not vals:
+        return False                      # 没有 "key: value" 结构，交给别的规则
+    for v in vals:
+        v = v.strip().strip("\"'")
+        if v and v.lower() not in ("null", "none", "false") and v not in ("[]", "{}"):
+            return False                  # 有非空值 -> 是真内容
+    return True
+
+
+def has_real_content(text: str) -> bool:
+    """这段文本是不是"真的说了点什么"。
+
+    为什么要它（2026-11-09）：合并写那一步是**让模型写最终文本**，
+    而模型（尤其弱模型）有时会吐 `{}` / `[]` / `null` / `--` 这类东西。
+    原来的守卫只判长度 < 2，挡不住这些。它们被当成有效记忆写进库后，
+    向量和关键词都检索不到 —— 那条记忆等于不存在，但还占着位置。
+
+    判断原则：**宁可重复，不可误删**。
+    只在"明显不是话"时返回 False；拿不准一律放行，
+    让调用方按纯新增处理（多一条重复，好过凭空丢掉一条真事实）。
+
+    Args:
+        text: 待判定的最终文本。
+
+    Returns:
+        True = 可以当记忆存；False = 是噪音，应该放弃这次合并。
+    """
+    t = (text or "").strip()
+    if len(t) < 2:
+        return False
+
+    if t.lower() in _MERGE_NOISE_TOKENS:
+        return False
+
+    if _json_has_no_value(t):
+        return False
+
+    # 去掉 JSON 结构字符后空无一物（"{}" 之外还有 '["a"]' 之类）
+    if not re.sub(r'[{}\[\]"\':,\s]', "", t):
+        return False
+
+    # 没有任何字母、数字或汉字 —— 全是标点符号
+    if not re.search(r"[\w\u4e00-\u9fff]", t):
+        return False
+
+    # 纯符号的重复（"----" "。。。。"）。
+    # ⚠ 不拦汉字的叠词（"嗯嗯" "哈哈"）—— 那些是正常回复，
+    # 早期版本用 `len(set(t)) == 1` 一刀切，把"嗯嗯"误判成了噪音。
+    if len(set(t)) == 1 and not re.search(r"[\w\u4e00-\u9fff]", t):
+        return False
+
+    return True
+
+
 def _parse_merge_reply(reply: str, related: list[dict]) -> tuple[str, list[str]] | None:
     """解析模型的合并回复。
 
@@ -126,12 +219,13 @@ def _parse_merge_reply(reply: str, related: list[dict]) -> tuple[str, list[str]]
             final_text = ln
 
     final_text = final_text.strip().strip("。 ")
-    # 太短或看起来像格式噪音 → 判失败，走纯新增。宁可重复不可误删。
+    # 内容质量守卫：太短 / 格式噪音 / 空 JSON -> 判失败，走纯新增。
     #
-    # 门槛取 2 而不是 4：中文里「合并后」「他不去」这种 3~4 字的事实是合法的
-    # （「他走了」「没人来」都是完整陈述）。真正的格式噪音是空串、单个字、
-    # 或者以 DROP/【 开头的行 —— 那些下面单独挡。
-    if len(final_text) < 2:
+    # ⚠ 2026-11-09 换成 `has_real_content()`：
+    # 原来只有 `len(final_text) < 2` 和「以 DROP/【 开头」两条，
+    # 挡不住 `{}` `[]` `null` `--` `none` —— 实测这 5 种全部通过，
+    # 然后被当成有效记忆写进库（生产库里就是 `text='{}'`）。
+    if not has_real_content(final_text):
         return None
     if re.match(r"^(DROP|【)", final_text, re.I):
         return None

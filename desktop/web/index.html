@@ -109,6 +109,12 @@
     <span class="pill" id="pill-tts"><i></i><span>语音连接中…</span></span>
     <span class="pill" id="pill-agent"><i></i><span>智能体</span></span>
     <span class="pill" id="pill-events"><i></i><span>桌宠 0</span></span>
+    <!-- 全局保存（2026-11-09 主人要求）：
+         模型那两张卡的改动**不点这里就不生效**。
+         以前每个输入框改完立刻写盘，手滑改错了没有反悔机会。 -->
+    <button id="btn-save-all" class="primary hidden" title="把改动写进配置并试连">
+      <span>保存更改</span><b id="save-dirty" class="hidden">0</b>
+    </button>
     <button id="btn-log" class="ghost log-toggle" aria-expanded="false" title="展开 / 收起对话记录">
       <span>对话记录</span><b id="log-badge" class="hidden">0</b>
     </button>
@@ -185,13 +191,13 @@
               <option value="local">本地模型</option>
               <option value="cloud">云端模型</option>
             </select>
+            <!-- 云端时这里是「预设」，选一下自动填下面的服务地址。
+                 本地模式下整行隐藏 —— 本地模型没有服务商可选，
+                 以前两个下拉框并排显示，看着像本地也能选供应商。 -->
             <select id="lm-provider" class="field" style="flex:1"></select>
           </div>
           <input id="lm-base" class="field" placeholder="服务地址（https://…/v1）" autocomplete="off">
           <input id="lm-model" class="field" placeholder="模型名" autocomplete="off">
-          <div class="row">
-            <button id="btn-lm-save" class="ghost" style="flex:1">保存并试连</button>
-          </div>
           <div class="kv"><span>当前</span><b id="lm-current">—</b></div>
           <div class="kv"><span>密钥</span><b id="lm-key-state">—</b></div>
           <p class="hint">用哪把 key 由下面的「API 密钥」决定。</p>
@@ -208,12 +214,9 @@
           <input id="sm-base" class="field" placeholder="服务地址（https://…/v1）" autocomplete="off">
           <input id="sm-model" class="field" placeholder="模型名" autocomplete="off">
           <input id="sm-key" class="field" type="password" placeholder="API Key（留空 = 不改现有的）" autocomplete="new-password">
-          <div class="row">
-            <button id="btn-sm-save" class="ghost" style="flex:1">保存并试连</button>
-          </div>
           <div class="kv"><span>当前</span><b id="sm-current">—</b></div>
           <div class="kv"><span>密钥</span><b id="sm-key-state">—</b></div>
-          <p class="hint">留空密钥就沿用现在那把。切换前会先试连一次，连不上不会切。</p>
+          <p class="hint">选预设会自动填服务地址。留空密钥就沿用现在那把。</p>
         </div>
       </div>
 

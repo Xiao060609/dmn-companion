@@ -8,7 +8,8 @@
   },
   "dialog": {
     "max_sentences": 3,
-    "history_turns": 30,
+    "//history_turns": "每轮带多少条历史。⚠ 单位是**条**不是轮 —— 一问一答算两条，所以这个数除以 2 才是轮数。2026-11-09 从 30 改到 100：实测一次教学里 20 分钟聊了 39 轮，而 30 条 = 15 轮，第 15 轮之后最早的纠正就被挤出去了 —— 她越教越忘，看起来像「笨」，其实是窗口太小。100 条 = 50 轮，一次完整教学能装下。",
+    "history_turns": 100,
     "//max_tool_rounds": "角色层一轮对话最多连着调几轮工具（2026-11-07 从 system 段挪过来）。为什么是 4 不是 3：搜索天然要多轮（先搜、结果不对再细化、再搜、最后总结），实测三轮经常刚好用完、一句答案都没说。用满之后还有一次「不给工具」的收尾调用，所以最坏是 5 次。取值夹在 [1,8]",
     "max_tool_rounds": 4,
     "owner_ids": [
@@ -116,7 +117,13 @@
     "//mood": "心情（能力 4）：连续数值 + 档位名 + 理由，按需衰减（不跑定时器）。档位与速率写在 gateway/mood.py 的常量里（定稿：0.01/分钟、地板 ±0.5、加权 0.5/0.5）",
     "//proactive_speak": "主动说话总开关（2026-11-08 加，默认关）。关掉时整条链路不跑 —— 连模型都不调，不只是沉默。为什么默认关：她会弹气泡 + 出声，这种能力不该装上就开着。后台「主动说话」卡片可以随时打开。",
     "proactive_speak": {
-      "enabled": false
+      "owner": "gateway",
+      "enabled": true,
+      "//timing": "「何时说」（2026-11-09 加，抄 AstrBot Proactive Chat 的算法但放在网关）：说完就随机排下一次，间隔在 min/max 分钟之间均匀取。固定冷却会让人发现「她每隔 30 分钟准点来一句」，那不像人。",
+      "min_interval_minutes": 30,
+      "max_interval_minutes": 600,
+      "quiet_hours": "1-7",
+      "//owner": "谁负责主动说话（2026-11-09 加的唯一真源）。gateway=网关负责（启动时自动把 AstrBot 插件的 friend/group enable 关掉）；plugin=插件负责（网关不插嘴）；none=都不主动说话。"
     },
     "desktop_base": "http://127.0.0.1:8848",
     "//daily_review": "每日梳理期（第二层节律）。5 分钟心跳是被动反应层，一行不改；这一层负责「一天结束回头看一遍，决定要不要主动做点什么」。产出只进 inner_os，说不说永远由角色层决定。enabled=false 时连线程都不起",
@@ -153,9 +160,17 @@
       "memory_sink_enabled": false,
       "quiet_hours": [],
       "//check_s": "梳理线程多久判一次『该不该跑』。2026-11-09 从 600 改成 14400（4 小时）：实测 277 条 skip 审计只换来 2 次真梳理（138:1），而 too_early 不带任何诊断信息，纯占体积。为什么不是更稀：earliest_hour=21 + idle_after_minutes=120 意味着只有『深夜且已安静 2 小时』才跑得成，检查太稀会撞上主人在聊天、判 not_idle，然后整晚错过。4 小时一天 6 次，够密。",
-    "check_s": 14400,
+      "check_s": 14400,
       "boot_delay_s": 90,
       "//boot_delay_s": "起来先等这么久就立即判一次，不要先睡一整天（巩固线程踩过这个坑）"
+    },
+    "qq_delivery": {
+      "//": "通过 AstrBot 的 OpenAPI 把消息发到 QQ（2026-11-09 加）。网关自己不会连 QQ —— 那是 AstrBot 的活。这里只调它的 POST /api/v1/im/messages。关掉 enabled 就只发桌宠。",
+      "enabled": true,
+      "base": "http://127.0.0.1:6185",
+      "umo": "snowluma-onebot:FriendMessage:10000001",
+      "timeout_s": 10,
+      "//key": "API key 存在 data/qq_delivery.json（不进 git），这里不写明文"
     }
   },
   "identity": {

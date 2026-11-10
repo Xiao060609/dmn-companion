@@ -725,8 +725,8 @@ class TestPlanLifecycle:
         现在验证的话**真的进了候选**（而且只取同一主体的渠道）。
         """
         eid = add_plan(created_days_ago=11, evidence="给我加升级", attempts=1)
-        add_turn(PRIVATE, "user", "[私聊] 主人: 弄好了", time.time() + 1)
-        add_turn(GROUP, "user", "[群聊·示例群] 路人: 弄好了", time.time() + 2)
+        add_turn(PRIVATE, "user", "【私聊：10000001】示例用户（主人）： 弄好了", time.time() + 1)
+        add_turn(GROUP, "user", "【群聊·示例群：10000002】路人（路人）： 弄好了", time.time() + 2)
 
         cands = system._pending_plan_candidates()
         assert len(cands) == 1
@@ -746,7 +746,7 @@ class TestPlanLifecycle:
         `said_after_trigger` 里，所以模型没有"被误导"的原料。
         """
         add_plan(created_days_ago=11, channel=PET, attempts=1)
-        add_turn(GROUP, "user", "[群聊·示例群] 路人: 弄好了", time.time() + 1)
+        add_turn(GROUP, "user", "【群聊·示例群：10000002】路人（路人）： 弄好了", time.time() + 1)
         cands = system._pending_plan_candidates()
         assert cands and cands[0]["said_after_trigger"] == ""
 
@@ -862,7 +862,7 @@ class TestPlanLifecycle:
         assert cands[0]["channel"] == PRIVATE
 
         # 真的走一遍：留痕事件必须落在**原渠道**
-        add_turn(PRIVATE, "user", "[私聊] 主人: 弄好了", time.time())
+        add_turn(PRIVATE, "user", "【私聊：10000001】示例用户（主人）： 弄好了", time.time())
         # 只能巩固私聊那一路 —— 计划在 `PRIVATE` 渠道上，巩固 `PET` 的话
         # 水位/增量对不上（`_read_channel_turns()` 按渠道精确读）。
         run = consolidate_with_verdicts(

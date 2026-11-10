@@ -87,7 +87,7 @@ def test_主人在私聊里回应也算回应(tmp_path, monkeypatch):
     """关心投到桌宠，主人转头在 QQ 私聊回一句——这也是回应。"""
     gateway = _mkdb(tmp_path, monkeypatch)
     system.record_care_given({"text": "还不睡呀"}, channel="pet")
-    _add_turn(gateway, "[私聊] 主人: 嗯，马上了", time.time() + 1, channel="qq_private")
+    _add_turn(gateway, "【私聊：10000001】示例用户（主人）： 嗯，马上了", time.time() + 1, channel="qq_private")
     assert system._mark_care_outcomes() == 1
     assert _statuses(gateway) == ["responded"]
 
@@ -95,7 +95,7 @@ def test_主人在私聊里回应也算回应(tmp_path, monkeypatch):
 def test_私聊里的拒绝也算拒绝(tmp_path, monkeypatch):
     gateway = _mkdb(tmp_path, monkeypatch)
     system.record_care_given({"text": "还不睡呀"}, channel="pet")
-    _add_turn(gateway, "[私聊] 主人: 别管我", time.time() + 1, channel="qq_private")
+    _add_turn(gateway, "【私聊：10000001】示例用户（主人）： 别管我", time.time() + 1, channel="qq_private")
     assert system._mark_care_outcomes() == 1
     assert _statuses(gateway) == ["rejected"]
 
@@ -104,7 +104,7 @@ def test_群里别人接话不算主人回应(tmp_path, monkeypatch):
     """群聊不是「主人回应」的渠道——否则一次没人理的关心会被误判成 responded。"""
     gateway = _mkdb(tmp_path, monkeypatch)
     system.record_care_given({"text": "还不睡呀"}, channel="pet")
-    _add_turn(gateway, "[群聊·某群] 路人: 哈哈", time.time() + 1, channel="qq_group:某群")
+    _add_turn(gateway, "【群聊·某群：10000002】路人（路人）： 哈哈", time.time() + 1, channel="qq_group:某群")
     assert system._mark_care_outcomes() == 0
     assert _statuses(gateway) == ["open"]
 

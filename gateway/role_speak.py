@@ -60,6 +60,125 @@ def deliver_to_pet(rendered: dict) -> bool:
     return True
 
 
+def _qq_delivery_cfg() -> dict:
+    """读 QQ 投递配置：`config.json` 里的公开项 + `data/qq_delivery.json` 里的 key。
+
+    为什么 key 分开放（2026-11-09）：`config.json` 进 git，
+    `gateway/data/` 整个目录被忽略。API key 是凭据，不能进仓库。
+
+    Returns:
+        `{"enabled", "base", "api_key", "umo", "timeout_s"}`。
+        key 读不到时 `api_key` 为空串（调用方据此判"没配"）。
+    """
+    import json as _json
+    import os as _os
+
+    import gateway
+
+    cfg = (gateway.CFG.get("system") or {}).get("qq_delivery") or {}
+    key = ""
+    secret_path = _os.path.join(
+        _os.path.dirname(_os.path.abspath(__file__)), "data", "qq_delivery.json"
+    )
+    try:
+        with open(secret_path, encoding="utf-8") as fh:
+            key = str((_json.load(fh) or {}).get("api_key") or "").strip()
+    except (OSError, ValueError):
+        key = ""
+    return {
+        "enabled": bool(cfg.get("enabled", False)),
+        "base": str(cfg.get("base") or "http://127.0.0.1:6185").rstrip("/"),
+        "api_key": key,
+        "umo": str(cfg.get("umo") or "").strip(),
+        "timeout_s": float(cfg.get("timeout_s") or 10),
+    }
+
+
+def deliver_to_qq(rendered: dict, umo: str = "") -> bool:
+    """把台词通过 AstrBot 的 OpenAPI 发到 QQ。返回是否真的发出去了。
+
+    为什么是"调 AstrBot"而不是"网关自己连 QQ"（2026-11-09 定的）
+    --------------------------------------------------------------
+    网关没有 QQ 协议栈，AstrBot 有。让网关自己连 QQ 等于把整条
+    登录/心跳/重连/多平台适配重写一遍 —— 那不是这个项目该干的事。
+
+    AstrBot 已经提供了标准接口：
+
+        POST /api/v1/im/messages
+        Authorization: Bearer <api_key>
+        {"umo": "snowluma-onebot:FriendMessage:123", "message": "要说的话"}
+
+    所以这里只做三件事：拼请求、发、记审计。
+
+    Args:
+        rendered: `parse_reply()` 的产物（`text` / `emotion` / `tone`）。
+        umo: 发给谁。留空用配置里的（默认主人私聊）。
+
+    Returns:
+        True = 接口返回 200（**注意**：返回 200 只代表 AstrBot 收下了，
+        不代表对方的 QQ 真的收到了 —— 那边掉线时会静默失败）。
+    """
+    import system  # 复用系统层审计
+
+    cfg = _qq_delivery_cfg()
+    text = str(rendered.get("text") or "").strip()
+    if not text:
+        return False
+    if not cfg["enabled"]:
+        # 没开就不记审计 —— 每个心跳都记一条"没开"会刷屏
+        return False
+    if not cfg["api_key"]:
+        system._audit({
+            "event": "speak_fail", "ok": False, "text": text[:80],
+            "reason": "qq_no_api_key",
+        })
+        return False
+    target = (umo or cfg["umo"]).strip()
+    if not target:
+        system._audit({
+            "event": "speak_fail", "ok": False, "text": text[:80],
+            "reason": "qq_no_umo",
+        })
+        return False
+
+    payload = json.dumps(
+        {"umo": target, "message": text}, ensure_ascii=False
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        cfg["base"] + "/api/v1/im/messages",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + cfg["api_key"],
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=cfg["timeout_s"]) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+            status = resp.status
+    except Exception as exc:  # noqa: BLE001 —— AstrBot 没开 / 超时 / 401
+        system._audit({
+            "event": "speak_fail", "ok": False, "text": text[:80],
+            "reason": f"qq_deliver_error: {type(exc).__name__}",
+        })
+        return False
+
+    if status != 200:
+        system._audit({
+            "event": "speak_fail", "ok": False, "text": text[:80],
+            "reason": f"qq_http_{status}",
+        })
+        return False
+
+    system._audit({
+        "event": "speak", "ok": True, "channel": "qq",
+        "text": text, "emotion": rendered.get("emotion"),
+        "tone": rendered.get("tone") or "", "umo": target,
+    })
+    return True
+
+
 def _mood_line(st: dict) -> str:
     """只取「此刻心情」那一段（`mood_*` 四字段，按真实时间衰减后）。
 
@@ -185,10 +304,31 @@ def maybe_speak(signals: dict, st: dict) -> tuple[dict | None, str]:
     rendered = gateway.parse_reply(reply, gateway.CFG["dialog"]["max_sentences"])
     if not rendered or not rendered.get("text"):
         return None, "parse_failed"
-    if not deliver_to_pet(rendered):
+    # 投递（2026-11-09 起两条路）
+    # ----------------------------
+    # ① 桌宠：本机窗口，有订阅者才收得到（主场景：她在桌面上出声）
+    # ② QQ  ：AstrBot OpenAPI，`enabled` 打开才发（备选：人不在电脑前）
+    #
+    # 【当前策略·2026-11-09】桌宠优先，送不到才补 QQ。
+    #
+    # 为什么现在这么排：主人说「桌宠和QQ分开，只选一个说」——
+    # 同一句话在桌面弹一次、手机又响一次，不是"更可靠"，是打扰两次。
+    #
+    # ⚠ 但这条**不是硬性互斥**，主人也说「两边都发留着吧，没必要刻意改成互斥」。
+    #   以后想改成"两个都发"（比如桌宠只弹气泡、QQ 负责推送）直接改这里就行，
+    #   不用推翻什么设计。要改的话唯一要考虑的还是"别让人觉得被叫了两遍"。
+    #
+    # ⚠ 两边都没送到时必须返回 `delivery_failed`，不能算 `spoken` ——
+    #   否则审计里"她开口了"和"话没送出去"又混成一件事，
+    #   那正是当初把 declined / delivery_failed 拆开的理由。
+    pet_ok = deliver_to_pet(rendered)
+    qq_ok = False
+    if not pet_ok:
+        qq_ok = deliver_to_qq(rendered)
+    if not pet_ok and not qq_ok:
         return None, "delivery_failed"
     # 阶段 4：记一条 care_given 事件，等下次对话判定「有回应 / 被拒绝」。
-    # 渠道显式传 pet：台词是 `deliver_to_pet` 投到桌宠的，回应也应该去桌宠
+    # 渠道显式传 pet：台词是投到桌宠那条线，回应也应该去桌宠
     # （+ 主人私聊，见 system.CARE_RESPONSE_SIBLINGS）那条线上找。
     # 以前这里是写死的，主人在 QQ 私聊回她，三态判定永远看不到。
     try:

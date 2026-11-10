@@ -535,6 +535,91 @@ class MemoryStore:
         """只重建 FTS5 全文索引（不动 faiss）。"""
         self._bridge.run(self.db.document_storage.rebuild_fts_index())
 
+    def rebuild_vectors(self) -> dict:
+        """从 `documents` 全量重建 faiss 向量索引。
+
+        ⚠ 2026-11-09 补：这个函数**一直只活在注释里**。
+        `rebuild_index()` 的 docstring 早就写着「想修向量用 `rebuild_vectors()`」，
+        但那个方法从来没有被实现过 —— 所以真出了索引不一致，
+        看着注释去找工具，找不到。
+
+        这是第二次栽在同一件事上（上一次 49 条孤儿、这次 56 条），
+        两次都是手写一次性脚本修的。补上它，别再靠临场发挥。
+
+        和 `drop_orphan_vectors()` 的分工：
+
+          `drop_orphan_vectors` 只删多余的（索引有、库里没有），
+                                便宜，不动已有向量。
+          `rebuild_vectors`     两边都补齐：孤儿删掉、缺失的重算。
+                                会把**所有**向量重算一遍，慢
+                                （7 条文档在 CPU 上约 15 秒，1000 条约 20 分钟）。
+
+        Returns:
+            `{"before": 对账结果, "after": 对账结果, "rebuilt": 重算条数}`
+        """
+        before = self.consistency()
+
+        docs = self._bridge.run(
+            self.db.document_storage.get_documents({}, limit=None)
+        ) or []
+        if not docs:
+            # 库是空的：直接清空索引，别留一堆孤儿向量在里头
+            self._bridge.run(self.db.embedding_storage.delete(
+                self.db.embedding_storage.all_ids()
+            ))
+            return {"before": before, "after": self.consistency(), "rebuilt": 0}
+
+        import numpy as np  # noqa: PLC0415 —— 只有这里用
+
+        # ① 先清空索引：全量重建，不做增量合并，
+        #    这样"索引里多出来的"和"少掉的"一次全解决。
+        old_ids = self.db.embedding_storage.all_ids()
+        if old_ids:
+            self._bridge.run(self.db.embedding_storage.delete(old_ids))
+
+        # ② 逐条重算向量。
+        #
+        # ⚠ `embedding_storage.insert()` 的签名是 `(vector, id)` —— 它收的
+        # **已经是向量**，不是文本。文本要先过 `self._embedding.get_embedding()`。
+        # 这里一次性 batch 算完再逐条插，比一条一条掉进事件循环里算快得多。
+        usable = [(int(d["id"]), str(d.get("text") or "").strip())
+                  for d in docs
+                  if d.get("id") is not None and str(d.get("text") or "").strip()]
+        rebuilt = 0
+        if usable:
+            try:
+                vecs = self._bridge.run(
+                    self._embedding.get_embeddings([t for _, t in usable])
+                )
+            except Exception as exc:  # noqa: BLE001 —— 整批失败就整批放弃
+                logger.warning("重建向量：算 embedding 失败，索引已清空待重试: %s", exc)
+                vecs = []
+
+            for (doc_id, _text), vec in zip(usable, vecs or []):
+                try:
+                    arr = np.asarray(vec, dtype=np.float32)
+                    norm = float(np.linalg.norm(arr))
+                    if norm > 0:
+                        arr = arr / norm
+                    self._bridge.run(
+                        self.db.embedding_storage.insert(arr, doc_id)
+                    )
+                    rebuilt += 1
+                except Exception as exc:  # noqa: BLE001 —— 单条失败不拦整批
+                    logger.warning("重建向量失败 doc_id=%s: %s", doc_id, exc)
+
+        if rebuilt:
+            self._bridge.run(self.db.embedding_storage.save_index())
+
+        after = self.consistency()
+        logger.info(
+            "重建向量索引：重算 %d/%d 条，前后 orphans %d->%d，missing %d->%d",
+            rebuilt, len(usable),
+            len(before["orphans"]), len(after["orphans"]),
+            len(before["missing"]), len(after["missing"]),
+        )
+        return {"before": before, "after": after, "rebuilt": rebuilt}
+
     def consistency(self) -> dict:
         """对账：`documents` 行数 vs faiss 向量数。
 

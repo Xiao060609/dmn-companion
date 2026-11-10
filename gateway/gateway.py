@@ -3140,6 +3140,159 @@ def _is_memory_task(text: str) -> bool:
     return any(hint in body for hint in MEMORY_TASK_HINTS)
 
 
+#: AstrBot `Proactive Chat` 插件发起「主动说话」时用的模板抬头。
+#:
+#: 2026-11-09 加。这些请求的特征是：**没有人真的在说话**，而是插件在提醒
+#: 「你被授权主动开一次口」。把它当 `role=user` 存进 turns 会让模型以为
+#: 主人说了这段话 —— 生产库里就这么错了 14 条、横跨 10 天。
+#:
+#: 只认**模板抬头**，不认正文里出现的「主动消息」这类泛词：
+#: 主人自己聊天时说「我想主动一点」不该被误判成系统任务。
+PROACTIVE_TASK_MARKERS = (
+    "[系统任务：主动对话]",
+    "[系统任务：私聊主动对话]",
+    "[系统任务：群聊主动对话]",
+)
+
+
+def _is_proactive_task(text: str) -> bool:
+    """这条请求是不是「主动对话」插件发来的系统任务（不是谁在说话）。
+
+    为什么必须单独认出来：它长得像用户消息（`role=user`、带正文），
+    但语义是**系统给模型下的指令**。混进对话历史会变成她的人格设定。
+
+    Args:
+        text: 请求正文（已去掉唤醒上下文）。
+
+    Returns:
+        True = 是主动对话任务，要按系统操作处理（写 system_log，不进对话）。
+    """
+    body = (text or "").lstrip()
+    return any(marker in body for marker in PROACTIVE_TASK_MARKERS)
+
+
+def _proactive_task_body(text: str) -> str:
+    """从主动对话的模板里取出**有用那部分**：她想说什么，而不是指令本身。
+
+    模板里有 [情景分析] / [行动指南] / [最终指令] 三大段，
+    对流水账来说值得留的只有"为什么主动开口"那几句（情景分析），
+    其余是给模型的写作要求，记下来是噪声。
+
+    Args:
+        text: 原始请求正文。
+
+    Returns:
+        适合写进流水账的一句话。取不到有用信息时返回空串。
+    """
+    body = str(text or "").lstrip()
+    for marker in PROACTIVE_TASK_MARKERS:
+        if body.startswith(marker):
+            body = body[len(marker):].lstrip()
+            break
+
+    # [情景分析] 到下一个 [ 段落之间，是"她为什么想开口"
+    start = body.find("[情景分析]")
+    if start != -1:
+        seg = body[start + len("[情景分析]"):]
+        end = seg.find("[")
+        if end != -1:
+            seg = seg[:end]
+        # 只留第一句像样的（"我们好像已经有一段时间没有说话了…"）
+        for line in seg.splitlines():
+            line = line.strip().lstrip("-").strip()
+            # 跳过"当前时间是…""我主动找过他…"这类模板占位
+            if not line or line.startswith(("当前时间是", "我之前已经", "如果这个次数")):
+                continue
+            return line[:120]
+    return ""
+
+
+def _handle_proactive_task(text: str, session: str) -> dict:
+    """处理 AstrBot「主动对话」插件发来的系统任务。
+
+    这件事的本质（主人 2026-11-09 定的）：
+        主动对话**确实是一次系统操作**，被流水账记录下来是正常的。
+        错的是它以前被记成 `role=user` —— 那等于凭空造了一句"主人说的话"。
+
+    所以这里做三件事：
+        1. 让角色层照常生成台词（她还是那个她，人格/心情/画像都带上）
+        2. 把**这次系统操作**写进流水账（`system_log`），不是写成对话
+        3. 返回台词给插件，由插件发出去
+
+    Args:
+        text: 插件发来的完整模板。
+        session: 会话键。
+
+    Returns:
+        和 `handle_chat` 同形状的 dict —— 调用方（`Handler.do_POST`）
+        不需要为这条路写第二套响应逻辑。
+    """
+    import system
+
+    started = time.time()
+    why = _proactive_task_body(text)
+
+    # ---- 1. 让她说话 ----
+    # 走和正常对话同一条路（`build_messages` + `call_model`），
+    # 只是这一轮的"用户输入"是那句情景分析，而不是谁说的话。
+    # 这样她的人格、心情、人物画像、长期记忆全都照常生效。
+    prompt = why or "（系统提醒：你可以主动开一次口）"
+    try:
+        # ⚠ 签名是 `build_messages(session, text, ...)` —— 先 session 后 text，
+        #   和直觉相反，别写反了。
+        msgs = build_messages(session, prompt, channel="私聊")
+        reply, meta, calls = call_model(msgs)
+    except Exception as exc:  # noqa: BLE001 —— 主动说话失败不能拦主流程
+        audit({
+            "ts": time.time(), "session": session, "path": "proactive",
+            "status": "error", "reason": f"{type(exc).__name__}",
+            "latency_ms": int((time.time() - started) * 1000),
+            "in_len": len(text), "out_len": 0,
+        })
+        return {
+            "text": "", "emotion": None, "tone": "", "silent": True,
+            "latency_ms": int((time.time() - started) * 1000),
+            "fact": None, "meta": {},
+        }
+
+    parsed = parse_reply(reply or "", CFG["dialog"]["max_sentences"])
+    spoken = parsed.get("text") or ""
+
+    # ---- 2. 记成系统操作，不是对话 ----
+    # `append_system_log` 写的是 `turns.channel='system_log'`、`role='system'`。
+    # 这个渠道被 `recent_turns()` 明确排除，所以她下一轮读上下文时
+    # **不会**把它当成"有人跟我说过这话"。
+    #
+    # ⚠ 2026-11-09 主人定稿：流水账里这一行写成**固定的一句话** ——
+    #     「[系统] 主动发言：说点什么好呢…」
+    #   原来写的是从模板里抠出来的「我们好像已经有一段时间没有说话了…」，
+    #   那是插件塞给模型的**写作理由**，不是那天实际发生的事。
+    #   流水账该记「系统让她主动发一次言」，而不是替她复述她的动机。
+    if spoken:
+        try:
+            system.append_system_log("[系统] 主动发言：说点什么好呢…")
+        except Exception:  # noqa: BLE001 —— 记账失败不影响回话
+            pass
+
+    result = {
+        "text": spoken,
+        "emotion": parsed.get("emotion"),
+        "tone": parsed.get("tone") or "",
+        "silent": bool(parsed.get("silent")),
+        "latency_ms": int((time.time() - started) * 1000),
+        "fact": None,
+        "meta": meta,
+    }
+    audit({
+        "ts": time.time(), "session": session, "path": "proactive",
+        "status": "ok" if spoken else "empty",
+        "reason": "proactive_task",
+        "latency_ms": result["latency_ms"],
+        "in_len": len(text), "out_len": len(spoken),
+    })
+    return result
+
+
 # 记忆任务原样转发失败时的兜底：给一个**结构合法**的最小 JSON，
 # 让插件至少能过 json.loads，而不是掉进它自己的 "对话记录" 默认值。
 # 空数组是诚实的——"这次没抽出值得记的东西"，比编一段假记忆好。
@@ -3602,6 +3755,22 @@ class Handler(BaseHTTPRequestHandler):
             plugin_ctx = _extract_plugin_context(messages)
             # 唤醒插件注入的群聊前文只给这一轮看，不写记忆
             text, temp_ctx = _split_wake_context(text)
+            # 主动对话插件（AstrBot Proactive Chat）发来的请求：
+            # 它是一段**系统给自己的指令**（"你被授权发起一次主动消息"），
+            # 不是主人说的话。必须分流，不能当 user 消息存进 turns。
+            #
+            # ⚠ 2026-11-09 修：这里以前完全没有处理，于是整段 419 字符的模板
+            # 被当成 `role=user` 写进对话历史（生产库里有 14 条，横跨 10 天）。
+            # 后果是她每轮都能读到"我被命令过要主动关心他"——
+            # 一段系统指令变成了她人格的一部分。
+            #
+            # 正确处理不是"不记"（主人：主动对话确实是系统操作，
+            # 被流水账记录下来是正常的），而是**记成系统操作**：
+            # 写进 `system_log` 渠道（role=system），人翻流水账看得见，
+            # 但不会被当成有人在说话。
+            if _is_proactive_task(text):
+                _handle_proactive_task(text, session)
+                return
             # 两路临时上下文合流（都只进 build_messages 的 system 块）：
             # 唤醒前文在前，插件内容在后 —— 前者是"刚才群里怎么聊的"，
             # 后者是"这条消息相关的补充资料"，先场景后资料读起来更顺。

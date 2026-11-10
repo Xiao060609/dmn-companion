@@ -116,9 +116,20 @@ LABEL_GROUP = "群聊"
 LABEL_PRIVATE = "私聊"
 
 # 老数据内容里的来源前缀（gateway.handle_chat 写的 `[{channel}] {speaker}: {text}`）
+#
+# ⚠ 2026-11-09：标头在 11-08 改成了新格式（带 QQ 号 + 身份）：
+#     旧：`[群聊·示例群] 主人: …`  `[私聊] 某人: …`
+#     新：`【群聊·示例群：10000001】主人（主人）：…`
+#         `【私聊：10000001】某人（主人）：…`
+# 这里必须**两套都认**：老数据（11-08 之前）只有旧格式，
+# 新数据只有新格式，回填/回溯两条路都要走。
 CONTENT_GROUP_PREFIX = "[群聊·"
 CONTENT_GROUP = "[群聊]"
 CONTENT_PRIVATE = "[私聊]"
+#: 新格式的群聊前缀。取群名时不能用 `find("]")`，要用中文」之前的 `：`
+CONTENT_GROUP_PREFIX_NEW = "【群聊·"
+#: 新格式的私聊前缀
+CONTENT_PRIVATE_NEW = "【私聊："
 CONTENT_OWNER_PREFIXES = ("主人:", "主人：")
 # 这两类前缀不是「聊天」，是插件注入的任务说明，没有来源标签。
 # 但它们的内容里带着完整对话转写，必须归类，否则回填后是 NULL、
@@ -204,6 +215,22 @@ def infer_from_content(content: str) -> str | None:
         return CHANNEL_QQ_PRIVATE
     if text.startswith(CONTENT_SUMMARY):
         return CHANNEL_INTERNAL
+
+    # ---- 新格式（2026-11-08 起）----
+    # `【群聊·示例群：10000001】昵称（主人）：…`
+    if text.startswith(CONTENT_GROUP_PREFIX_NEW):
+        body = text[len(CONTENT_GROUP_PREFIX_NEW):]
+        # 群名到 `：` 为止（后面是 QQ 号）
+        cut = body.find("：")
+        name = body[:cut].strip() if cut > 0 else ""
+        if name:
+            return f"{CHANNEL_QQ_GROUP}:{name}"
+        return CHANNEL_QQ_GROUP
+    # `【私聊：10000001】昵称（主人）：…` 和 `【私聊：】…`（无号码）
+    if text.startswith(CONTENT_PRIVATE_NEW):
+        return CHANNEL_QQ_PRIVATE
+
+    # ---- 旧格式（11-08 之前的老数据）----
     if text.startswith(CONTENT_GROUP_PREFIX):
         end = text.find("]")
         if end > len(CONTENT_GROUP_PREFIX):

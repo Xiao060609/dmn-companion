@@ -28,6 +28,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from datetime import datetime
 
 import migrate_channel
@@ -523,6 +524,12 @@ def _default_state() -> dict:
         "recent_thoughts": [],
         "last_tick_ts": 0,
         "last_speak_ts": 0,
+        # 下一次最早可以主动开口的时刻（2026-11-09）。
+        # 每次**真的说完**之后由 `_schedule_next_speak()` 随机排出来。
+        # 必须在这里登记：`load_state()` 只保留本函数里出现过的键，
+        # 不登记的话每次读都被丢掉，等于每轮心跳都以为"没排过"。
+        "next_speak_ts": 0,
+        "next_speak_gap_s": 0,
         "speak_count_today": 0,
         "last_consolidate_id": 0,
         # 每个渠道各记各的水位（channel -> 已处理到的 turns.id）。
@@ -586,12 +593,14 @@ def load_state() -> dict:
         _mem.append(_m)
     st["memory"] = _mem[:50]
     st["recent_thoughts"] = [t for t in (st.get("recent_thoughts") or []) if isinstance(t, dict)][:10]
-    for k in ("last_tick_ts", "last_speak_ts", "last_consolidate_ts", "last_daily_review_ts"):
+    for k in ("last_tick_ts", "last_speak_ts", "last_consolidate_ts",
+              "last_daily_review_ts", "next_speak_ts"):
         try:
             st[k] = float(st[k])
         except (TypeError, ValueError):
             st[k] = 0
-    for k in ("speak_count_today", "last_consolidate_id", "last_persona_review_id", "last_seen_turn_id"):
+    for k in ("speak_count_today", "last_consolidate_id", "last_persona_review_id",
+              "last_seen_turn_id", "next_speak_gap_s"):
         try:
             st[k] = int(st.get(k) or 0)
         except (TypeError, ValueError):
@@ -781,13 +790,41 @@ def _read_recent_chat_multi(limit: int = 5) -> list[dict]:
     turns.reverse()  # 上面是 desc 取最新，翻成正序
 
     # 主人私聊要认人：陌生人 / `[系统任务：主动对话]` 不能算"主人刚说过什么"。
-    # 判定口径和 `_filter_owner_turns` 一致 —— 只认 `[私聊] 主人:` 前缀。
-    kept = [
-        t
-        for t in turns
-        if t["channel"] == migrate_channel.CHANNEL_PET
-        or t["content"].lstrip().startswith("[私聊] 主人")
-    ]
+    # 判定口径和 `_filter_owner_turns` 一致 —— 都用 OWNER_PRIVATE_RE。
+    #
+    # ⚠ 2026-11-09 修两处：
+    #
+    # ① 原来硬编码 `startswith("[私聊] 主人")`，标头改成
+    #    `【私聊：QQ号】昵称（主人）：` 之后一条都匹配不上，"主人私聊"
+    #    这条路整条失效。现在复用同一个正则。
+    #
+    # ② **她的回复被一起丢掉了。** 原来的条件只有「pet 渠道」或
+    #    「带（主人）标头」，而她的回复（`role=assistant`）没有标头 ——
+    #    于是系统层看到的对话是**单方面的**：只有主人说话，没有她接话。
+    #
+    #    实测后果（主人 2026-11-09 报的）：
+    #      素材里只有「撒撒娇就夸你」「刚才不是夸过你肥了吗」
+    #      而她前面那句「那主人夸夸我嘛」不在了 ——
+    #      模型只能推断成「**他**坚持要正经夸奖」，把主语搞反。
+    #      它没错，是喂给它的对话缺了一半。
+    #
+    #    修法：assistant 的回复跟着前一句走 —— 前一句是主人说的，这条就是
+    #    主人的对话上下文，必须留。陌生人后面的回复仍然不留（fail-closed）。
+    kept: list[dict] = []
+    owner_spoke = False
+    for t in turns:
+        if t.get("role") == "assistant":
+            # 只跟"前一句确实是主人说的"那一条
+            if owner_spoke:
+                kept.append(t)
+            continue
+        # 用户消息：pet 渠道整条可信；私聊要过标头正则
+        owner_spoke = bool(
+            t["channel"] == migrate_channel.CHANNEL_PET
+            or OWNER_PRIVATE_RE.match(t["content"].lstrip())
+        )
+        if owner_spoke:
+            kept.append(t)
     return kept[-limit:] if limit > 0 else kept
 
 
@@ -1473,11 +1510,224 @@ def _find_tool(calls, name: str) -> dict | None:
 
 
 # ---------------------------------------------------------------- 念头 → 台词
+def _speak_window_cfg() -> dict:
+    """主动说话的「何时说」配置（2026-11-09 加）。
+
+    这一层是抄 AstrBot `Proactive Chat` 的核心算法，但**放在网关**里：
+    决策权归系统层，QQ 只当发送通道。
+
+    为什么需要它
+    ------------
+    原来只有 `cooldown_s`（固定冷却，默认 1800 秒）——
+    等于"每 30 分钟就可以说一次"，机械且密集。
+    插件的做法是**在区间里随机**，人类感更强，也不会每天同一分钟开口。
+
+    Returns:
+        `{"min_interval_s", "max_interval_s", "quiet_hours"}`。
+    """
+    cfg = SYSTEM.get("proactive_speak") or {}
+    lo = float(cfg.get("min_interval_minutes", 30)) * 60
+    hi = max(lo, float(cfg.get("max_interval_minutes", 600)) * 60)
+    return {
+        "min_interval_s": lo,
+        "max_interval_s": hi,
+        # 安静时段（24 小时制，支持跨零点，如 "1-7" 表示 1 点到 7 点不说）
+        "quiet_hours": str(cfg.get("quiet_hours") or ""),
+    }
+
+
+def _in_quiet_hours(hours: str, now: float | None = None) -> bool:
+    """现在是不是安静时段。`hours` 形如 `"1-7"` / `"23-6"` / `""`（关闭）。
+
+    跨零点要能处理：`23-6` 表示 23 点到次日 6 点。
+
+    Args:
+        hours: 配置字符串。
+        now: 时间戳，默认当前。
+
+    Returns:
+        True = 这会儿别开口。
+    """
+    spec = str(hours or "").strip()
+    if not spec or "-" not in spec:
+        return False
+    try:
+        lo_s, hi_s = spec.split("-", 1)
+        lo, hi = int(lo_s.strip()), int(hi_s.strip())
+    except (TypeError, ValueError):
+        return False
+    hour = time.localtime(now if now is not None else time.time()).tm_hour
+    if lo == hi:
+        return False
+    if lo < hi:
+        return lo <= hour < hi
+    # 跨零点
+    return hour >= lo or hour < hi
+
+
+def _next_speak_due(st: dict) -> float:
+    """下一次**最早**可以开口的时间戳。没有排过就返回 0（= 现在就可以）。
+
+    `next_speak_ts` 是在每次**真的说完**之后才算出来的：
+    随机挑一个 `[min, max]` 区间内的间隔，加到当前时间上。
+
+    为什么用随机而不是固定间隔：固定的话，人会发现"她每隔 30 分钟准点来一句"，
+    那就不是人了。插件也是这么做的（`random.randint(min, max)`）。
+
+    Returns:
+        下一次允许开口的时刻；`<= now` 就表示到点了。
+    """
+    try:
+        return float(st.get("next_speak_ts") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _schedule_next_speak(st: dict, now: float | None = None) -> None:
+    """说完之后排下一次：随机挑一个间隔，写进 `st["next_speak_ts"]`。
+
+    Args:
+        st: 系统状态（会被就地改写，调用方负责 save_state）。
+        now: 基准时间戳，默认当前。
+    """
+    cfg = _speak_window_cfg()
+    base = float(now if now is not None else time.time())
+    # 取整到秒：`next_speak_gap_s` 是给人看的（"这次排了 78 分钟"），
+    # 存成整数更好读；排期时间也用同一个整数，否则两者对不上。
+    delay = int(random.uniform(cfg["min_interval_s"], cfg["max_interval_s"]))
+    st["next_speak_ts"] = base + delay
+    st["next_speak_gap_s"] = delay
+
+
+#: 「谁负责主动说话」的三种取值。
+#:
+#: 主人 2026-11-09 提的问题：两边各有一个开关（网关 `proactive_speak.enabled`
+#: + AstrBot 插件的 `friend_settings.enable`），改哪个都得记住另一个，
+#: 而且两边同时开会**重复说话**。
+#:
+#: 所以引入 `owner` 作为**唯一真源**：
+#:
+#:   "gateway" —— 网关负责。启动时自动把插件开关设成关。
+#:   "plugin"  —— 插件负责（旧行为）。网关自己不开口。
+#:   "none"    —— 谁都不主动说话。
+#:
+#: 为什么不是"两个程序读同一个配置文件"：它们各读各的，而且 AstrBot 会
+#: 覆盖插件配置。所以这里走**启动时同步**——一个地方改，两边跟随。
+_SPEAK_OWNER_VALUES = ("gateway", "plugin", "none")
+
+
+def speak_owner() -> str:
+    """现在谁负责主动说话。读 `proactive_speak.owner`。
+
+    兼容旧配置：没有 `owner` 字段时按 `enabled` 推断 ——
+    `enabled=true` 就是网关负责（旧语义），否则 none。
+    这样老配置文件不用改也能正确工作。
+
+    Returns:
+        `"gateway"` / `"plugin"` / `"none"`。配置写了非法值时退化成 `"none"`
+        （宁可不说，也不要两边撞车）。
+    """
+    cfg = SYSTEM.get("proactive_speak") or {}
+    raw = str(cfg.get("owner") or "").strip().lower()
+    if raw in _SPEAK_OWNER_VALUES:
+        return raw
+    if raw:
+        # 写了 owner 但值不认识：**不能**当成"没写"走去兼容分支，
+        # 那样会把 "两边都开" 这种笔误静默解释成 gateway，
+        # 而用户可能以为插件还在负责 —— 两边同时说。
+        # 宁可都不说（fail-closed）。
+        return "none"
+    # 真的没有 owner 字段：兼容旧配置
+    return "gateway" if bool(cfg.get("enabled", False)) else "none"
+
+
+#: AstrBot 主动对话插件的配置文件（相对 `qq/astrbot/`）。
+#: 网关启动时会把 `friend_settings.enable` 同步成这里算出来的值。
+_PLUGIN_SPEAK_CFG = Path(
+    "data/config/astrbot_plugin_proactive_chat_config.json"
+)
+
+
+def _plugin_speak_cfg_path() -> Path:
+    """插件配置文件的实际路径。
+
+    从网关目录反推 `qq/astrbot`：
+        gateway/system.py -> gateway/ -> G:\\小鱼 -> qq/astrbot
+    路径不存在时返回一个不存在的 Path（调用方据此跳过同步）。
+    """
+    root = Path(__file__).resolve().parent.parent
+    return root / "qq" / "astrbot" / _PLUGIN_SPEAK_CFG
+
+
+def sync_plugin_speak(owner: str | None = None) -> dict:
+    """把「谁负责主动说话」同步给 AstrBot 插件。
+
+    这是 `owner` 的落地动作：工关只在网关配置里改，插件跟着变。
+    不这么做的话，两边各有一个开关，迟早会同时开着**重复说话**。
+
+    只改 `friend_settings.enable` 和 `group_settings.enable`，
+    别的键一律不碰（插件配置很大，乱写会破坏别人的设置）。
+
+    Args:
+        owner: 想设成谁负责；留空则读当前配置。
+
+    Returns:
+        `{"ok": bool, "owner": str, "changed": bool, "reason": str}`。
+        文件不存在/解析失败都不抛 —— 同步是锦上添花，不能拦启动。
+    """
+    who = owner or speak_owner()
+    path = _plugin_speak_cfg_path()
+    if not path.is_file():
+        return {"ok": False, "owner": who, "changed": False,
+                "reason": "plugin_config_missing"}
+
+    # 插件该不该由它自己开口：只有 owner=="plugin" 时才开
+    want = who == "plugin"
+    try:
+        raw = path.read_text(encoding="utf-8-sig")
+        cfg = json.loads(raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"ok": False, "owner": who, "changed": False,
+                "reason": f"read_fail: {type(exc).__name__}"}
+
+    changed = False
+    for section in ("friend_settings", "group_settings"):
+        block = cfg.get(section)
+        if not isinstance(block, dict):
+            continue
+        if bool(block.get("enable")) != want:
+            block["enable"] = want
+            changed = True
+
+    if not changed:
+        return {"ok": True, "owner": who, "changed": False, "reason": "already"}
+
+    try:
+        path.write_text(
+            json.dumps(cfg, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8", newline="",
+        )
+    except OSError as exc:
+        return {"ok": False, "owner": who, "changed": False,
+                "reason": f"write_fail: {type(exc).__name__}"}
+
+    _audit({
+        "event": "speak_owner_sync", "ok": True,
+        "owner": who, "plugin_enable": want,
+    })
+    return {"ok": True, "owner": who, "changed": True, "reason": "synced"}
+
+
 def _allow_speak(st: dict) -> bool:
-    """主动说话的安全刹车（纯代码，不经过模型）：总开关 + 每日上限 + 冷却。
+    """主动说话的安全刹车（纯代码，不经过模型）。
 
     改造后 urgency 判断已移除——要不要说、多想说，由角色层（deepseek）决定，
-    系统层只守住「**要不要允许她说**、每天最多几句、多久说一次」三道硬闸。
+    系统层只守住这几道硬闸：
+
+      * 总开关（默认关）
+      * 每日上限
+      * **自然间隔**（2026-11-09 加：在 [min,max] 里随机，不是固定冷却）
+      * **安静时段**（2026-11-09 加：比如凌晨 1-7 点不开口）
 
     ⚠ 2026-11-08 加**总开关**（主人要求，默认关）：
     `SYSTEM["proactive_speak"]["enabled"]` 为假时，整条主动说话链路直接不跑 ——
@@ -1485,7 +1735,25 @@ def _allow_speak(st: dict) -> bool:
 
     为什么默认关：主动说话是**会打扰人**的行为（气泡弹出来 + 语音出声）。
     这种能力不该装上就开着，得主人明确点头。后台「主动说话」卡片可以随时开。
+
+    ⚠ 2026-11-09 加**自然间隔**：原来只有 `cooldown_s` 固定冷却，
+    等于"每 30 分钟准点能说一次"—— 机械、可预测，不像人。
+    现在改成说完就随机排下一次（`_schedule_next_speak`），
+    和 AstrBot 那个插件同一个算法，但决策权在网关。
+
+    Args:
+        st: 系统状态。跨天清零、排下一次都会就地改写。
+
+    Returns:
+        True = 现在允许她说。
+    ⚠ 2026-11-09 加 `owner`（唯一真源）。原来这里只看 `enabled`，
+    但插件那边还有一个 `friend_settings.enable` —— 两个开关各管各的，
+    改一个忘一个就会**两边同时说明同一句话**。
+    现在：`owner == "gateway"` 这条路才跑，插件由 `sync_plugin_speak()` 同步关掉。
     """
+    # 不是「网关负责」就整条不跑 —— 插件负责时网关不能插嘴
+    if speak_owner() != "gateway":
+        return False
     if not bool((SYSTEM.get("proactive_speak") or {}).get("enabled", False)):
         return False
     now = time.time()
@@ -1498,6 +1766,14 @@ def _allow_speak(st: dict) -> bool:
         st["speak_count_today"] = 0
     if count >= int(SYSTEM.get("max_speak_per_day", 6)):
         return False
+    # 安静时段：连"要不要说"都不问，直接拦（省一次模型调用）
+    if _in_quiet_hours(_speak_window_cfg()["quiet_hours"], now):
+        return False
+    # 自然间隔：没排过（next_speak_ts=0）就放行，排过就要等
+    due = _next_speak_due(st)
+    if due and now < due:
+        return False
+    # 兜底：`cooldown_s` 仍然生效（防止状态被外部改成 0 之后每轮都开口）
     if last and now - last < float(SYSTEM.get("cooldown_s", 1800)):
         return False
     return True
@@ -1617,6 +1893,12 @@ def _tick_body() -> None:
             st["focus"] = str(rendered.get("text") or "")[:40]
             st["last_speak_ts"] = time.time()
             st["speak_count_today"] = int(st.get("speak_count_today") or 0) + 1
+            # 说完之后排下一次（2026-11-09）：在 [min,max] 里随机挑一个间隔。
+            # 固定冷却会让人发现"她每隔 30 分钟准点来一句"，那不像人。
+            try:
+                _schedule_next_speak(st, st["last_speak_ts"])
+            except Exception:  # noqa: BLE001 —— 排期失败不拦这一次成功
+                pass
             spoke = True
 
     # 系统流水账：**只有真的送出去了**才记（2026-11-06 补，能力 5 第四节）。
@@ -2012,13 +2294,32 @@ CHANNEL_OWNER_KEY = "owner"  # 主人在内心OS / 人物画像里的归一键�
 #: 那时不能靠"取最新 20 条"，因为相关的可能是很久以前那条。
 EXISTING_COGNITIONS_LIMIT = 20
 
-# turns 表没有 speaker 列，只能靠 handle_chat 写死在 content 里的前缀认人：
-#   私聊  `[私聊] 主人: …`
-#   群聊  `[群聊·示例群] 某人: …`
-#   桌宠  `主人: …`
+# turns 表没有 speaker 列，只能靠 handle_chat 写死在 content 里的前缀认人。
+#
+# ⚠ 2026-11-09 修：这两个正则**没跟上标头格式改造**，导致巩固全线失效。
+#
+# 标头在 2026-11-08 按主人要求从旧格式改成了带 QQ 号 + 身份的新格式：
+#     旧：`[私聊] 主人: …`        `[群聊·示例群] 某人: …`
+#     新：`【私聊：QQ号】昵称（主人）：…`
+#         `【群聊·群名：QQ号】昵称（路人）：…`
+#
+# 但这两个正则留在了旧格式上。后果是一条都匹配不上：
+#     `_filter_owner_turns` → 全丢 → 巩固报 no_new_turns
+#     `_filter_group_turns` → 全丢 → 群聊渠道永远没有增量
+# 实测：qq_private 读出 164 条、群聊 36 条，被 `_route_turns` 全部过滤成 0。
+# 表现是「巩固 455 次只成功 28 次」「人格复盘 40 小时没成功」——
+# 看起来像"新对话不够"，实际上是**一条都认不出来**。
+#
 # 前缀对不上就不抽：认错人比漏抽一句危险得多。
-OWNER_PRIVATE_RE = re.compile(r"^\[私聊\]\s*主人\s*[:：]")
-GROUP_LABEL_RE = re.compile(r"^\[群聊·([^\]]+)\]")
+#
+#: 主人私聊。新格式：`【私聊：10000001】X（主人）：我是谁？`
+#: 只认 `（主人）` —— 路人的私聊不该按主人的话去抽事实（fail-closed）。
+OWNER_PRIVATE_RE = re.compile(
+    r"^【私聊：\d*】[^【】\n]{0,40}（主人）\s*[:：]"
+)
+#: 群聊。新格式：`【群聊·群名：QQ号】昵称（路人）：…`
+#: group(1) 取群名，和渠道键后缀比对（防数据错位）。
+GROUP_LABEL_RE = re.compile(r"^【群聊·([^：】]+)：")
 
 # _consolidate_channel 的三种结果
 _CH_OK = "ok"          # 这个渠道处理完了，水位已前进
@@ -2563,6 +2864,13 @@ def append_system_log(text: str) -> bool:
         就搞成这种「[系统] 计划触发：问他升级的事」流水账里呗，
         **其他系统操作也扔流水账里**。
 
+    主人 2026-11-09 又强调了一次（当时发现只有 3 种动作在记、共 7 条）：
+        「不要给我搞五花八门的流水账出来，**流水账就一本**。」
+        「这才能看出时间顺序。」
+
+    所以这个函数是**唯一的记账入口** —— 一本账就是 `turns` 表，
+    里面有对话、也有 `[系统]` 开头的行，按 id 排在一起就是一条时间线。
+
     为什么必须新开一个渠道而不是复用 `internal`：见 `migrate_channel.CHANNEL_SYSTEM_LOG`
     的注释 —— 两者语义正好相反（`internal` 任何上下文都不进，`system_log` 必须让
     模型看到）。
@@ -2575,6 +2883,12 @@ def append_system_log(text: str) -> bool:
         [系统] 巩固完成：写入 3 条记忆
         [系统] 主动说话：主人刚回来
         [系统] 体检：发现 2 个问题
+
+    分档（2026-11-09 定的，见 `_LEDGER_RULES`）：
+        必记 —— 她真做了什么：巩固写入 / 主动开口 / 计划触发与收尾 / 人格修改
+        记了有用 —— 一天一次：梳理产出 / 体检 / 记忆清理
+        不记 —— 噪声：心跳（一天 288 条）、没到点的空转、运维异常（那些进
+                `system_audit.jsonl`，是诊断用的，不是流水账）
 
     Args:
         text: 已带 `[系统]` 前缀的正文（用 `plan.system_log_trigger()` 这类函数拼）。
@@ -4281,6 +4595,11 @@ def _maybe_prune_long_memory(st: dict) -> None:
         "review": stats.get("review", 0),
         "boosted": stats.get("boosted", 0),
     })
+    # 流水账（2026-11-09）：**只在真删了东西时记**。
+    # 一天一次的空扫描（deleted=0）不记 —— 那是"无事发生"，记了等于刷屏。
+    deleted = int(stats.get("deleted") or 0)
+    if deleted > 0:
+        append_system_log(f"[系统] 记忆清理：删了 {deleted} 条过期的")
 
 
 def _maybe_forget_review(limit: int = 10) -> list[dict]:
@@ -4919,6 +5238,13 @@ def _daily_review_body(now: float | None = None, probe_decision: str | None = No
 
     ok = any(r["ok"] for r in ran)
 
+    # 流水账（2026-11-09）：梳理是"她一天里回头看过一次"，
+    # 人翻时间线时该看得到。只在**真产出念头**时记 ——
+    # 空转（all_failed）不记，那是诊断信息，进 system_audit。
+    if ok and produced > 0:
+        acts = "、".join(r["activity"] for r in ran if r.get("ok"))
+        append_system_log(f"[系统] 梳理完成：{acts}，产出 {produced} 条念头")
+
     # P0-5 的 C 路（**2026-11-07 已关闭**）：反刍/预演的产物不再沉淀进长期记忆库。
     #
     # 主人的定稿（2026-11-07）：
@@ -5089,6 +5415,10 @@ def _write_persona(content: str) -> bool:
             persona_sync.note_file_written(content)
         except Exception:  # noqa: BLE001 —— 同步失败不影响演化本身
             pass
+        # 流水账（2026-11-09）：人格真的被改了就记一笔。
+        # 这是"她变成什么样了"的重要节点，人回头看时该看得到。
+        _audit({"event": "persona_update", "ok": True, "chars": len(content)})
+        append_system_log("[系统] 人格被修改（复盘提出的建议已采纳）")
         return True
     except OSError as exc:
         _audit({"event": "persona_update", "ok": False, "reason": f"write_fail: {type(exc).__name__}"})
@@ -5176,6 +5506,10 @@ def _review_persona() -> None:
             "ts": time.time(),
         }])
         _audit({"event": "persona_review", "ok": True, "changed": True})
+        # 流水账（2026-11-09）：复盘想改人格 —— 这是"她可能变成另一个样子"
+        # 的起点，人回头看时该看得到。（真正改成功会由 `_write_persona()`
+        # 再记一笔「人格被修改」，两笔不重复：一笔是提议，一笔是落地。）
+        append_system_log("[系统] 人格复盘：提了一条修改建议，等她过目")
     else:
         _audit({"event": "persona_review", "ok": True, "changed": False})
 
@@ -6363,13 +6697,26 @@ def apply_proactive_speak(payload: dict) -> tuple[bool, str]:
     cfg = SYSTEM.setdefault("proactive_speak", {})
     cfg["enabled"] = enabled
 
-    # 回写 config.json（保留注释键和其余字段）
+    # 回写 config.json（**只改 enabled 一个键**）
+    #
+    # ⚠ 2026-11-09 修：这里原来是
+    #       sect["proactive_speak"] = {"enabled": enabled}
+    #   整个替换掉那一段 —— 注释写着"保留注释键和其余字段"，但代码没做到。
+    #   后果：后台点一下「主动说话」开关，`owner` / `min_interval_minutes` /
+    #   `max_interval_minutes` / `quiet_hours` 全部被抹掉，只剩 {"enabled": x}。
+    #   实测就是这么丢掉过一次（配置退回 {"enabled": false}）。
+    #
+    #   现在改成在磁盘那份上逐键合并，别的键一律不碰。
     try:
         cfg_path = os.path.join(ROOT, "config.json")
         with open(cfg_path, encoding="utf-8") as fh:
             disk = json.load(fh)
-        sect = disk.setdefault("system", {})
-        sect["proactive_speak"] = {"enabled": enabled}
+        sys_sect = disk.setdefault("system", {})
+        on_disk = sys_sect.get("proactive_speak")
+        if not isinstance(on_disk, dict):
+            on_disk = {}
+        on_disk["enabled"] = enabled
+        sys_sect["proactive_speak"] = on_disk
         tmp = cfg_path + ".tmp"
         with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(disk, fh, ensure_ascii=False, indent=2)
@@ -6438,6 +6785,22 @@ def start() -> list[threading.Thread]:
             print(f"  人物画像迁移: {moved} 个文件改到新命名", flush=True)
     except Exception as exc:  # noqa: BLE001 —— 迁移失败不该拦住启动
         print(f"  [warn] 人物画像迁移失败: {type(exc).__name__}: {exc}", flush=True)
+    # 「谁负责主动说话」同步给 AstrBot 插件（2026-11-09）。
+    #
+    # 为什么放在启动做：`owner` 是唯一真源，插件不应该有独立的开关状态。
+    # 不启动就同步的话，改了 owner 要等下次重启才生效 —— 而"忘记重启"
+    # 正是两边同时开、重复说话的直接原因。
+    try:
+        who = speak_owner()
+        res = sync_plugin_speak(who)
+        if res.get("changed"):
+            print(f"  主动说话归属: {who}（已同步给 AstrBot 插件）", flush=True)
+        elif not res.get("ok"):
+            print(f"  [warn] 插件开关同步失败: {res.get('reason')}", flush=True)
+        else:
+            print(f"  主动说话归属: {who}", flush=True)
+    except Exception as exc:  # noqa: BLE001 —— 同步失败不该拦住启动
+        print(f"  [warn] 插件开关同步异常: {type(exc).__name__}: {exc}", flush=True)
     threads = [
         threading.Thread(target=_heartbeat_loop, name="system-heartbeat", daemon=True),
         threading.Thread(target=_persona_apply_worker, name="system-persona-apply", daemon=True),
@@ -6671,15 +7034,65 @@ def _recent_daily_review_audits(limit: int = 5) -> list[dict]:
     return out[-limit:][::-1]
 
 
+def detect_provider(base: str, fallback: str = "custom") -> str:
+    """从服务地址反推是哪家服务商。
+
+    为什么需要（2026-11-09 主人报的 bug）：
+    后台「系统模型」卡片显示的是「阿里云百炼」，但实际地址是
+    `https://apihub.agnes-ai.com/v1` —— 那是自定义中转，不是阿里云。
+
+    根因：`provider` 和 `base` 是**两个独立字段**，配置里写了
+    `provider: "dashscope"`，后来主人把 `base` 改成了 agnes 的地址，
+    provider 没跟着改。前端按 provider 显示，就看到一个假的标签。
+
+    真源应该是 `base` —— 地址是实际在用的东西，`provider` 只是个
+    给 UI 用的名字。所以这里**以 base 为准反推**，推不出来才回落到
+    配置里的 provider。
+
+    Args:
+        base: 服务地址（形如 `https://api.deepseek.com/v1`）。
+        fallback: 反推不出来时用哪个（一般是配置里的 provider）。
+
+    Returns:
+        服务商键名（`dashscope` / `deepseek` / ... / `custom`）。
+    """
+    b = str(base or "").strip().lower().rstrip("/")
+    if not b:
+        return fallback or "custom"
+
+    # 按每个服务商的域名特征匹配。**只看域名**，不看路径 ——
+    # 同一家的地址可能带不同的兼容模式前缀。
+    hosts = {
+        "dashscope": "dashscope.aliyuncs.com",
+        "deepseek": "api.deepseek.com",
+        "openai": "api.openai.com",
+        "moonshot": "api.moonshot.cn",
+        "siliconflow": "api.siliconflow.cn",
+    }
+    for name, host in hosts.items():
+        if host in b:
+            return name
+
+    # 认不出来：如果配置里的 provider 不是 custom，但地址也不匹配它自己的
+    # 预设，那 provider 就是过时的 —— 归到 custom，别骗人。
+    return "custom"
+
+
 def system_model_payload() -> dict:
     """给后台「系统模型」卡片用：当前配置 + 可选服务商（key 只回掩码）。
 
     和 `_role_payload()` 形状对齐，前端两张卡片可以用同一套渲染逻辑。
+
+    ⚠ 2026-11-09：`provider` 改成**从 base 反推**（`detect_provider`）。
+    配置里那一份可能是过时的 —— 主人改了地址没改 provider，
+    卡片就会显示「阿里云百炼」而实际在连 agnes。
     """
     key = _system_key()
+    base = SYSTEM.get("base", "")
     return {
-        "provider": SYSTEM.get("provider", ""),
-        "base": SYSTEM.get("base", ""),
+        # 以 base 为准，不用配置里那个可能过时的 provider
+        "provider": detect_provider(base, SYSTEM.get("provider", "")),
+        "base": base,
         "model": SYSTEM.get("model", ""),
         "key_set": bool(key),
         "key_masked": (key[:6] + "…" + key[-4:]) if len(key) > 12 else "",

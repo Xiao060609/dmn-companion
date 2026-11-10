@@ -376,3 +376,150 @@ def test_桥并发安全(tmp_path):
         assert s.count() == 15
     finally:
         s.close()
+
+# --------------------------------------------------------------------------- #
+# 索引一致性（2026-11-09）
+#
+# 背景：`documents`（sqlite）和 faiss 向量索引**无法共用一个事务**，
+# 只能写补偿逻辑。补偿失败（进程被杀、断电）会把两边永久劈开，
+# 而且**不报任何错** —— 召回只是悄悄变差。
+# 实测栽过两次：documents 7 行、index 56 个向量，孤儿把 top-k 名额占满，
+# 语义召回命中真记忆 0 条。
+# --------------------------------------------------------------------------- #
+def test_新建库对账是一致的(mem):
+    c = mem.consistency()
+    assert c["docs"] == 0
+    assert c["vectors"] == 0
+    assert c["orphans"] == []
+    assert c["missing"] == []
+    assert c["ok"] is True
+
+
+def test_写入后对账仍然一致(mem):
+    mem.add("主人喜欢灰色", {"importance": 0.6})
+    mem.add("主人大三学生", {"importance": 0.6})
+    c = mem.consistency()
+    assert c["docs"] == 2
+    assert c["vectors"] == 2
+    assert c["ok"] is True
+
+
+def test_手动删库会产生孤儿向量(mem):
+    """直接删 documents 行、不动 faiss —— 模拟"补偿失败"的现场。"""
+    mem.add("主人喜欢灰色", {"importance": 0.6})
+    mem.add("主人大三学生", {"importance": 0.6})
+
+    # 绕过 store.delete()（那个会同时删向量），直接动 sqlite
+    import sqlite3
+
+    conn = sqlite3.connect(mem.db_path)
+    try:
+        conn.execute("delete from documents where rowid = "
+                     "(select min(rowid) from documents)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    c = mem.consistency()
+    assert c["docs"] == 1
+    assert c["vectors"] == 2, "向量数应该还是 2"
+    assert len(c["orphans"]) == 1, "应该报出 1 个孤儿向量"
+    assert c["ok"] is False
+
+
+def test_drop_orphan_vectors清掉孤儿(mem):
+    mem.add("主人喜欢灰色", {"importance": 0.6})
+    mem.add("主人大三学生", {"importance": 0.6})
+
+    import sqlite3
+
+    conn = sqlite3.connect(mem.db_path)
+    try:
+        conn.execute("delete from documents where rowid = "
+                     "(select min(rowid) from documents)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert mem.consistency()["ok"] is False
+    n = mem.drop_orphan_vectors()
+    assert n == 1, "应该删掉 1 个孤儿"
+    assert mem.consistency()["ok"] is True
+
+
+def test_drop_orphan_vectors没孤儿时返回0(mem):
+    mem.add("主人喜欢灰色", {"importance": 0.6})
+    assert mem.drop_orphan_vectors() == 0
+
+
+def test_rebuild_vectors修好缺失向量(mem):
+    """`documents` 有行、faiss 没向量 —— 这条记忆等于检索不到。
+
+    `drop_orphan_vectors()` 处理不了这个方向（它只删多余的），
+    必须靠 `rebuild_vectors()` 重算。
+    """
+    mem.add("主人喜欢灰色", {"importance": 0.6})
+    mem.add("主人大三学生", {"importance": 0.6})
+
+    # 清空向量索引，保留 documents
+    mem._bridge.run(mem.db.embedding_storage.delete(
+        mem.db.embedding_storage.all_ids()
+    ))
+
+    c = mem.consistency()
+    assert c["docs"] == 2
+    assert c["vectors"] == 0, "向量被清空了"
+    assert len(c["missing"]) == 2, "应该报出 2 个缺失"
+    assert c["ok"] is False
+
+    res = mem.rebuild_vectors()
+    assert res["rebuilt"] == 2
+    assert res["after"]["ok"] is True, "重建后应该一致"
+    assert res["after"]["vectors"] == 2
+
+
+def test_rebuild_vectors同时修好孤儿和缺失(mem):
+    """两个方向都坏的情况下，一次重建全部修好。"""
+    mem.add("主人喜欢灰色", {"importance": 0.6})
+    mem.add("主人大三学生", {"importance": 0.6})
+    mem.add("主人住重庆", {"importance": 0.6})
+
+    import sqlite3
+
+    # 删一行 documents（造孤儿）
+    conn = sqlite3.connect(mem.db_path)
+    try:
+        conn.execute("delete from documents where rowid = "
+                     "(select min(rowid) from documents)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    c = mem.consistency()
+    assert len(c["orphans"]) == 1
+    assert c["ok"] is False
+
+    res = mem.rebuild_vectors()
+    assert res["after"]["ok"] is True
+    assert res["after"]["docs"] == 2
+    assert res["after"]["vectors"] == 2
+    assert res["rebuilt"] == 2
+
+
+def test_rebuild_vectors空库也不炸(mem):
+    """库是空的时候重建，不能抛异常。"""
+    res = mem.rebuild_vectors()
+    assert res["rebuilt"] == 0
+    assert mem.consistency()["ok"] is True
+
+
+def test_rebuild_vectors保留原有向量内容(mem):
+    """重建之后，检索结果不能变 —— 否则就等于把记忆写坏了。"""
+    mem.add("主人喜欢灰色", {"importance": 0.6})
+    mem.add("主人住重庆", {"importance": 0.6})
+
+    before = {h["text"] for h in mem.search("灰色", top_k=2)}
+    mem.rebuild_vectors()
+    after = {h["text"] for h in mem.search("灰色", top_k=2)}
+
+    assert before == after, "重建前后检索结果不一致"

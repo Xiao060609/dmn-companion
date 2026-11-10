@@ -1,4 +1,4 @@
-"""Breeze 引擎端到端冒烟：起 server.py → 等 /api/status tts_ready → POST /api/tts → 验 WAV。
+"""Breeze 引擎端到端冒烟：起 server.py → 等 /api/status tts_ready → POST /api/tts → 验 WAV。"""
 import json
 import struct
 import sys

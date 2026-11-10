@@ -1,0 +1,59 @@
+fix: 脱敏会走穿 junction 改掉源项目真数据 —— 加两道保护
+
+## 事故
+
+纯净版有 6 个 junction 指回源项目，而 `desensitize()` 用
+`DST.rglob("*")` 遍历 —— **rglob 会走穿 junction**。
+
+它顺着 `gateway/data` 进到源项目，把真数据全改了：
+
+    gateway/data/identity.json          主人 QQ -> 10000001（她把你当路人）
+    qq/astrbot/data/cmd_config.json     admins_id -> 10000001（你不再是管理员）
+    qq/qq-bridge/state/social-v2.json   35 处 userId
+    qq/qq-bridge/state/stickers.json    144 处表情 ID 前缀
+    qq/astrbot/data/plugin_data/.../session_data.json  发送目标全错
+    gateway/data/people/...             画像的渠道键坏了
+
+一共 19 个真数据文件，**全程没有任何报错**。
+
+## 两道保护
+
+**第一道：desensitize 跳过 junction 子树**
+
+    links = _junctions(DST)
+    ...
+    if _under(p, links):
+        skipped_links += 1
+        continue
+
+实测跳过 4366 个 junction 文件，剩下 221 个纯净版自己的文件照常脱敏。
+
+**第二道：audit_damage_risk() 独立校验**
+
+第一道依赖「junction 还在」。如果哪天链接被删成普通目录
+（有人复制了一份），保护就失效了。
+
+所以脱敏前先自检：列出所有会被脱敏的文件，只要有一个落在
+真数据目录里就中止，并告诉人怎么修（重建 junction）。
+
+反向验证过：临时把 gateway/data 换成真目录，立刻报
+「!! gateway/data/identity.json」。
+
+## 教训
+
+**工具改文件的地方，必须有独立的"该不该改"校验。**
+
+不能只在改的那一刻判断（`_under()` 当时是对的），
+还要有事后能查的（全量扫描真数据目录）。
+这次就是靠「顺手全查了一遍真数据」才找到另外 18 个被污染的文件。
+
+## 数据恢复
+
+真值从数据里反推确认，不凭猜：
+
+    主人 QQ    3047980857   标头出现 348 次
+    机器人 QQ  107592691    SnowLuma 配置文件名
+    群名       网络避难所      turns.channel
+    群友       霖粽          标头昵称列表
+
+9 个文件恢复，QQ 连接验证正常。

@@ -155,6 +155,47 @@ def sync_files() -> list[str]:
     return changed
 
 
+def _junctions(root: Path) -> list[Path]:
+    """列出 `root` 下所有 junction / 符号链接目录。
+
+    ⚠ 2026-11-10 踩过的坑（这是本项目最阴的一次）：
+    纯净版里有 6 个 junction 指回源项目：
+        desktop/assets、desktop/desktop/node_modules、gateway/data、
+        qq/astrbot、qq/qq-bridge、qq/SnowLuma
+
+    `desensitize()` 原来用 `DST.rglob("*")` 遍历 —— **rglob 会走穿 junction**，
+    于是它顺着 `gateway/data` 进到源项目，把
+    `data/identity.json` 里的真主人 QQ 号替换成了占位值！
+
+    后果：她开始把主人判成"路人"，记忆/画像/内心OS 全按路人处理。
+    而且**没有任何报错** —— 脱敏本来就该改文件，改了也不奇怪。
+
+    现在：遍历前先收集 junction 路径，遇到就跳过整个子树。
+    """
+    out: list[Path] = []
+    try:
+        for p in root.rglob("*"):
+            try:
+                if p.is_dir() and (p.is_junction() or p.is_symlink()):
+                    out.append(p)
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return out
+
+
+def _under(path: Path, roots: list[Path]) -> bool:
+    """`path` 是不是落在某个 junction 子树里。"""
+    for r in roots:
+        try:
+            path.relative_to(r)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def desensitize() -> int:
     """对公仓里所有文本文件做脱敏。返回修改的文件数。"""
     #: 这些文件**不能**被脱敏 —— 它们本身就含路径/敏感词的字面量。
@@ -165,6 +206,10 @@ def desensitize() -> int:
     #: publish.py 当时没跳 —— 自己把自己改瞎了。
     NO_TOUCH = {"publish.py", "check_privacy.py"}
 
+    # ⚠ 先收集 junction，遍历时跳过 —— 否则会改到源项目的数据文件。
+    links = _junctions(DST)
+    skipped_links = 0
+
     n_files = 0
     for p in DST.rglob("*"):
         if not p.is_file() or p.suffix.lower() not in TEXT_SUFFIX:
@@ -174,6 +219,10 @@ def desensitize() -> int:
             continue
         # 工具脚本自身跳过：它们的规则里必然含敏感词/本机路径字面量
         if p.name in NO_TOUCH:
+            continue
+        # 落在 junction 子树里的文件**绝对不能碰** —— 那是源项目的真数据
+        if _under(p, links):
+            skipped_links += 1
             continue
         try:
             txt = p.read_text(encoding="utf-8")
@@ -188,6 +237,8 @@ def desensitize() -> int:
         if txt != orig:
             p.write_text(txt, encoding="utf-8", newline="")
             n_files += 1
+    if skipped_links:
+        print(f"   （跳过 {skipped_links} 个文件：在 junction 子树里，属于源项目真数据）")
     return n_files
 
 
@@ -202,6 +253,60 @@ def ensure_ignore_rules() -> bool:
         return False
     gi.write_text(t.rstrip() + REQUIRED_IGNORE, encoding="utf-8", newline="")
     return True
+
+
+def audit_damage_risk() -> list[str]:
+    """脱敏前的**硬体检**：会不会改到源项目的真数据。
+
+    为什么要有这道闸（2026-11-10 血的教训）
+    --------------------------------------
+    纯净版有 6 个 junction 指回源项目，`rglob` 会走穿。
+    它把 `gateway/data/identity.json` 里的真主人 QQ 换成了占位值，
+    还顺手改了 AstrBot 的 `admins_id`、社交记录、表情 ID ——
+    19 个真数据文件被污染，**而且全程没有任何报错**。
+
+    后果：她开始把主人当路人；AstrBot 里主人不再是管理员。
+
+    `desensitize()` 现在会跳过 junction 子树，但那依赖于
+    「junction 还在」。如果哪天链接被删成普通目录（复制了一份），
+    保护就失效了。
+
+    所以这里加一道**独立校验**：列出所有会被脱敏的文件，
+    只要有一个落在「真数据目录」里，就说明保护失效 —— 直接中止。
+
+    Returns:
+        风险列表；空列表 = 安全。
+    """
+    #: 这些目录在源项目里是真数据，纯净版里**只能通过 junction 出现**。
+    #: 正常情况下它们全在 junction 子树里，会被跳过。
+    #: 如果它们出现在可脱敏范围，说明 junction 没了（数据被复制进来了）。
+    DANGER = (
+        "gateway/data/",
+        "desktop/data/",
+        "qq/astrbot/data/",
+        "qq/SnowLuma/config/",
+        "qq/qq-bridge/state/",
+        "qq/qq-bridge/config/",
+    )
+
+    links = _junctions(DST)
+    risks: list[str] = []
+    for p in DST.rglob("*"):
+        if not p.is_file() or p.suffix.lower() not in TEXT_SUFFIX:
+            continue
+        if any(x in p.parts for x in
+               (".git", "node_modules", ".venv", "__pycache__", "_private")):
+            continue
+        if p.name in {"publish.py", "check_privacy.py"}:
+            continue
+        if _under(p, links):
+            continue      # 在 junction 里 -> desensitize 会跳过
+        rel = str(p.relative_to(DST)).replace("\\", "/")
+        for danger in DANGER:
+            if rel.startswith(danger):
+                risks.append(rel)
+                break
+    return risks
 
 
 def main() -> int:
@@ -222,20 +327,38 @@ def main() -> int:
 
     print()
     print("=" * 60)
-    print("2. 脱敏")
+    print("2. 脱敏前体检")
+    print("=" * 60)
+    risks = audit_damage_risk()
+    if risks:
+        print("   !! 有 %d 个真数据文件暴露在脱敏范围内：" % len(risks))
+        for rel in risks[:15]:
+            print("      %s" % rel)
+        if len(risks) > 15:
+            print("      ... 还有 %d 个" % (len(risks) - 15))
+        print()
+        print("   原因：这些目录本该是 junction（指向源项目），")
+        print("         现在成了普通目录，脱敏会把真值换成占位符。")
+        print("   处理：删掉这些目录，重建 junction。手册第四节有命令。")
+        return 1
+    print("   ✔ 真数据全部在 junction 后面，不会被脱敏")
+
+    print()
+    print("=" * 60)
+    print("3. 脱敏")
     print("=" * 60)
     n = desensitize()
     print("   处理 %d 个文件" % n)
 
     print()
     print("=" * 60)
-    print("3. 补 .gitignore 规则")
+    print("4. 补 .gitignore 规则")
     print("=" * 60)
     print("   %s" % ("已补" if ensure_ignore_rules() else "无需补"))
 
     print()
     print("=" * 60)
-    print("4. 校验")
+    print("5. 校验")
     print("=" * 60)
     r = subprocess.run(
         [sys.executable, str(DST / "tools" / "check_privacy.py")],
